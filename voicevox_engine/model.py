@@ -8,6 +8,7 @@ API と ENGINE 内部実装が共有するモデル
 """
 
 from pathlib import Path
+from typing import Literal
 
 from aivmlib.schemas.aivm_manifest import AivmManifest
 from pydantic import BaseModel, Field
@@ -127,4 +128,125 @@ class AivmInfo(BaseModel):
     manifest: AivmManifest = Field(description="AIVM マニフェスト")
     speakers: list[LibrarySpeaker] = Field(
         description="話者情報のリスト (VOICEVOX ENGINE 互換)"
+    )
+
+
+class AivmModelRuntimeState(BaseModel):
+    """音声合成モデルのプロセス内ランタイム状態。"""
+
+    model_uuid: str = Field(description="AIVM マニフェスト記載の音声合成モデルの UUID")
+    is_loaded: bool = Field(description="この音声合成モデルが現在ロード済みかどうか")
+    is_cached_in_ram: bool = Field(
+        description="この音声合成モデルが現在 RAM にキャッシュされているかどうか"
+    )
+    is_loaded_in_vram: bool = Field(
+        description="この音声合成モデルが現在 VRAM にロードされているかどうか"
+    )
+    is_pinned: bool = Field(description="この音声合成モデルが eviction 対象から保護されているかどうか")
+    residency: Literal["unloaded", "ram", "vram"] = Field(
+        description="この音声合成モデルの現在の常駐状態"
+    )
+    load_count: int = Field(description="このプロセスでモデルをロードした回数")
+    inference_device: Literal["cpu", "gpu"] = Field(
+        description="この音声合成モデルがロードされた推論デバイス"
+    )
+    onnx_providers: list[str] = Field(
+        description="この音声合成モデルのロード時に使用した ONNX Runtime Provider 一覧"
+    )
+    last_loaded_at: float | None = Field(
+        description="最後にロードされた時刻 (Unix time)。未ロードの場合は null"
+    )
+    last_used_at: float | None = Field(
+        description="最後に推論で使用された時刻 (Unix time)。未使用の場合は null"
+    )
+    last_unloaded_at: float | None = Field(
+        description="最後にアンロードされた時刻 (Unix time)。未アンロードの場合は null"
+    )
+
+
+class AivmModelRuntimePolicy(BaseModel):
+    """音声合成モデルのプロセス内ランタイム運用ポリシー。"""
+
+    max_loaded_models: int | None = Field(
+        default=None,
+        description="自動 eviction 後に維持したい最大ロード済みモデル数。null の場合は自動 eviction を無効化する"
+    )
+    max_vram_loaded_models: int | None = Field(
+        default=None,
+        description="自動 demote 後に維持したい最大 VRAM ロード済みモデル数。null の場合は自動 demote を無効化する"
+    )
+    min_available_ram_gb: float | None = Field(
+        default=None,
+        description="自動 eviction 後に確保したい最小空き RAM 容量 (GB)。null の場合は RAM 残量ベースの自動 eviction を無効化する"
+    )
+    min_available_vram_gb: float | None = Field(
+        default=None,
+        description="自動 demote 後に確保したい最小空き VRAM 容量 (GB)。null の場合は VRAM 残量ベースの自動 demote を無効化する"
+    )
+
+
+class AivmModelResourceEstimate(BaseModel):
+    """音声合成モデルごとの推定リソース使用量。"""
+
+    model_uuid: str = Field(description="AIVM マニフェスト記載の音声合成モデルの UUID")
+    estimated_ram_cache_size_gb: float = Field(
+        description="この音声合成モデルを RAM キャッシュした場合の推定使用量 (GB)"
+    )
+    estimated_vram_load_size_gb: float = Field(
+        description="この音声合成モデルを VRAM にロードした場合の推定使用量 (GB)"
+    )
+
+
+class AivmModelRuntimeResourceSnapshot(BaseModel):
+    """音声合成モデル運用に関する現在のリソース状況。"""
+
+    inference_device: Literal["cpu", "gpu"] = Field(description="現在の推論デバイス")
+    total_ram_gb: float = Field(description="ホストで利用可能な総 RAM 容量 (GB)")
+    available_ram_gb: float = Field(description="現在の空き RAM 容量 (GB)")
+    total_vram_gb: float | None = Field(
+        description="推論に使用する GPU の総 VRAM 容量 (GB)。取得できない場合は null"
+    )
+    available_vram_gb: float | None = Field(
+        description="推論に使用する GPU の空き VRAM 容量 (GB)。取得できない場合は null"
+    )
+    loaded_model_count: int = Field(description="現在ロード済みの音声合成モデル数")
+    vram_loaded_model_count: int = Field(description="現在 VRAM にロード済みの音声合成モデル数")
+    runtime_policy: AivmModelRuntimePolicy = Field(description="現在のランタイム運用ポリシー")
+    model_resource_estimates: list[AivmModelResourceEstimate] = Field(
+        description="音声合成モデルごとの推定リソース使用量一覧"
+    )
+
+
+class AivmModelAdmissionDecision(BaseModel):
+    """音声合成モデル操作の dry-run admission 判定結果。"""
+
+    model_uuid: str = Field(description="対象の音声合成モデル UUID")
+    operation: Literal["prefetch", "promote"] = Field(description="判定対象の操作")
+    can_admit: bool = Field(description="現在の資源状況でこの操作を受け入れ可能かどうか")
+    estimated_ram_cache_size_gb: float = Field(
+        description="この操作で必要となる推定 RAM キャッシュ使用量 (GB)"
+    )
+    estimated_vram_load_size_gb: float = Field(
+        description="この操作で必要となる推定 VRAM 使用量 (GB)"
+    )
+    predicted_available_ram_gb: float = Field(
+        description="この操作を行った直後に見込まれる空き RAM 容量 (GB)"
+    )
+    predicted_available_vram_gb: float | None = Field(
+        description="この操作を行った直後に見込まれる空き VRAM 容量 (GB)。取得できない場合は null"
+    )
+    required_min_available_ram_gb: float | None = Field(
+        description="policy で要求される最小空き RAM 容量 (GB)。未設定の場合は null"
+    )
+    required_min_available_vram_gb: float | None = Field(
+        description="policy で要求される最小空き VRAM 容量 (GB)。未設定の場合は null"
+    )
+    ram_shortage_gb: float = Field(
+        description="受け入れのために不足している RAM 容量 (GB)。不足がない場合は 0"
+    )
+    vram_shortage_gb: float | None = Field(
+        description="受け入れのために不足している VRAM 容量 (GB)。判定不能または不足がない場合は null または 0"
+    )
+    runtime_resources: AivmModelRuntimeResourceSnapshot = Field(
+        description="判定時点のリソース状況スナップショット"
     )

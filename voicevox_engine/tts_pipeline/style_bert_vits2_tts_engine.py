@@ -6,14 +6,17 @@ import shutil
 import threading
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
+import GPUtil
 import aivmlib
 import jaconv
 import numpy as np
 import onnxruntime
+import psutil
 from fastapi import HTTPException
 from numpy.typing import NDArray
 from onnxruntime.capi.onnxruntime_pybind11_state import InvalidProtobuf, NoSuchFile
@@ -41,7 +44,14 @@ from ..core.core_adapter import CoreAdapter, DeviceSupport
 from ..dev.core.mock import MockCoreWrapper
 from ..logging import logger
 from ..metas.Metas import StyleId
-from ..model import AudioQuery
+from ..model import (
+    AivmModelAdmissionDecision,
+    AivmModelResourceEstimate,
+    AivmModelRuntimePolicy,
+    AivmModelRuntimeResourceSnapshot,
+    AivmModelRuntimeState,
+    AudioQuery,
+)
 from ..tts_pipeline.audio_postprocessing import raw_wave_to_output_wave
 from ..tts_pipeline.model import AccentPhrase, Mora
 from ..tts_pipeline.tts_engine import (
@@ -49,6 +59,12 @@ from ..tts_pipeline.tts_engine import (
     to_flatten_moras,
 )
 from ..utility.path_utility import get_save_dir
+
+
+@dataclass
+class _PrefetchedModelArtifacts:
+    hyper_parameters: HyperParameters
+    style_vectors: NDArray[Any]
 
 
 class StyleBertVITS2TTSEngine(TTSEngine):
@@ -82,6 +98,14 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         self.tts_models: dict[str, TTSModel] = {}
         # ロード済みモデルのキャッシュへのアクセスを排他制御するためのロック
         self._tts_models_lock: threading.Lock = threading.Lock()
+
+        self._runtime_states: dict[str, AivmModelRuntimeState] = {}
+        self._runtime_states_lock: threading.Lock = threading.Lock()
+        self._prefetched_model_artifacts: dict[str, _PrefetchedModelArtifacts] = {}
+        self._prefetched_model_artifacts_lock: threading.Lock = threading.Lock()
+        self._runtime_policy: AivmModelRuntimePolicy = AivmModelRuntimePolicy(
+            max_loaded_models=None
+        )
 
         # ONNX Runtime の推論処理を排他制御するためのロック
         self._inference_lock: Final[threading.Lock] = threading.Lock()
@@ -204,6 +228,668 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         ## 継承元の TTSEngine は self._core に CoreWrapper を入れた CoreAdapter のインスタンスがないと動作しない
         self._core = CoreAdapter(MockCoreWrapper())
 
+    def _get_provider_names(self) -> list[str]:
+        provider_names: list[str] = []
+        for provider in self.onnx_providers:
+            if isinstance(provider, tuple):
+                provider_names.append(provider[0])
+            else:
+                provider_names.append(provider)
+        return provider_names
+
+    def _get_inference_device(self) -> Literal["cpu", "gpu"]:
+        provider_names = self._get_provider_names()
+        if any(
+            provider_name in {"CUDAExecutionProvider", "DmlExecutionProvider"}
+            for provider_name in provider_names
+        ):
+            return "gpu"
+        return "cpu"
+
+    def _get_loaded_residency(self) -> Literal["ram", "vram"]:
+        if self._get_inference_device() == "gpu":
+            return "vram"
+        return "ram"
+
+    def _sync_runtime_state_residency(
+        self, runtime_state: AivmModelRuntimeState
+    ) -> None:
+        runtime_state.is_loaded = (
+            runtime_state.is_cached_in_ram is True
+            or runtime_state.is_loaded_in_vram is True
+        )
+        if runtime_state.is_loaded_in_vram is True:
+            runtime_state.residency = "vram"
+        elif runtime_state.is_cached_in_ram is True:
+            runtime_state.residency = "ram"
+        else:
+            runtime_state.residency = "unloaded"
+
+    def _read_model_artifacts(self, aivm_model_uuid: str) -> _PrefetchedModelArtifacts:
+        aivm_info = self.aivm_manager.get_aivm_info(aivm_model_uuid)
+        try:
+            with open(aivm_info.file_path, mode="rb") as f:
+                aivm_metadata = aivmlib.read_aivmx_metadata(f)
+        except aivmlib.AivmValidationError as ex:
+            logger.error(
+                f"{aivm_info.file_path}: Failed to read AIVM metadata:", exc_info=ex
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to read AIVM metadata.",
+            ) from ex
+
+        hyper_parameters = HyperParameters.model_validate(
+            aivm_metadata.hyper_parameters.model_dump()
+        )
+
+        assert aivm_metadata.style_vectors is not None
+        style_vectors = np.load(BytesIO(aivm_metadata.style_vectors))
+
+        return _PrefetchedModelArtifacts(
+            hyper_parameters=hyper_parameters,
+            style_vectors=style_vectors,
+        )
+
+    def _get_or_prefetch_model_artifacts(
+        self, aivm_model_uuid: str
+    ) -> _PrefetchedModelArtifacts:
+        with self._prefetched_model_artifacts_lock:
+            artifacts = self._prefetched_model_artifacts.get(aivm_model_uuid)
+            if artifacts is not None:
+                return artifacts
+
+        artifacts = self._read_model_artifacts(aivm_model_uuid)
+        with self._prefetched_model_artifacts_lock:
+            existing_artifacts = self._prefetched_model_artifacts.get(aivm_model_uuid)
+            if existing_artifacts is not None:
+                return existing_artifacts
+            self._prefetched_model_artifacts[aivm_model_uuid] = artifacts
+        return artifacts
+
+    def _estimate_model_cache_size_gb(self, aivm_model_uuid: str) -> float:
+        aivm_info = self.aivm_manager.get_aivm_info(aivm_model_uuid)
+        return float(aivm_info.file_size / (1024**3))
+
+    def _ensure_capacity_for_model_operation(
+        self,
+        aivm_model_uuid: str,
+        *,
+        needs_ram_cache: bool,
+        needs_vram_load: bool,
+    ) -> None:
+        runtime_policy = self.get_runtime_policy()
+        if (
+            runtime_policy.min_available_ram_gb is None
+            and runtime_policy.min_available_vram_gb is None
+        ):
+            return
+
+        self.apply_runtime_policy(exclude_aivm_model_uuids={aivm_model_uuid})
+
+        admission_decision = self.inspect_model_admission(
+            aivm_model_uuid,
+            operation=("promote" if needs_vram_load is True else "prefetch"),
+        )
+        if admission_decision.ram_shortage_gb > 0:
+            raise HTTPException(
+                status_code=507,
+                detail=(
+                    "Insufficient RAM capacity to cache this model while satisfying "
+                    "the current runtime policy."
+                ),
+            )
+        if admission_decision.vram_shortage_gb is not None and admission_decision.vram_shortage_gb > 0:
+            raise HTTPException(
+                status_code=507,
+                detail=(
+                    "Insufficient VRAM capacity to load this model while satisfying "
+                    "the current runtime policy."
+                ),
+            )
+
+    def inspect_model_admission(
+        self,
+        aivm_model_uuid: str,
+        operation: Literal["prefetch", "promote"],
+    ) -> AivmModelAdmissionDecision:
+        runtime_state = self.get_model_runtime_state(aivm_model_uuid)
+        runtime_resources = self.get_runtime_resource_snapshot()
+        estimated_ram_cache_size_gb = self._estimate_model_cache_size_gb(aivm_model_uuid)
+        estimated_vram_load_size_gb = self._estimate_model_cache_size_gb(aivm_model_uuid)
+
+        needs_ram_cache = runtime_state is None or runtime_state.is_cached_in_ram is False
+        needs_vram_load = (
+            operation == "promote"
+            and self._get_inference_device() == "gpu"
+            and (runtime_state is None or runtime_state.is_loaded_in_vram is False)
+        )
+
+        predicted_available_ram_gb = runtime_resources.available_ram_gb - (
+            estimated_ram_cache_size_gb if needs_ram_cache is True else 0.0
+        )
+        if runtime_resources.available_vram_gb is None:
+            predicted_available_vram_gb = None
+        else:
+            predicted_available_vram_gb = runtime_resources.available_vram_gb - (
+                estimated_vram_load_size_gb if needs_vram_load is True else 0.0
+            )
+
+        required_min_available_ram_gb = runtime_resources.runtime_policy.min_available_ram_gb
+        required_min_available_vram_gb = runtime_resources.runtime_policy.min_available_vram_gb
+        ram_shortage_gb = 0.0
+        if required_min_available_ram_gb is not None:
+            ram_shortage_gb = max(0.0, required_min_available_ram_gb - predicted_available_ram_gb)
+
+        vram_shortage_gb: float | None = None
+        if required_min_available_vram_gb is not None and predicted_available_vram_gb is not None:
+            vram_shortage_gb = max(0.0, required_min_available_vram_gb - predicted_available_vram_gb)
+
+        can_admit = ram_shortage_gb == 0.0 and (vram_shortage_gb is None or vram_shortage_gb == 0.0)
+
+        return AivmModelAdmissionDecision(
+            model_uuid=aivm_model_uuid,
+            operation=operation,
+            can_admit=can_admit,
+            estimated_ram_cache_size_gb=estimated_ram_cache_size_gb,
+            estimated_vram_load_size_gb=estimated_vram_load_size_gb,
+            predicted_available_ram_gb=predicted_available_ram_gb,
+            predicted_available_vram_gb=predicted_available_vram_gb,
+            required_min_available_ram_gb=required_min_available_ram_gb,
+            required_min_available_vram_gb=required_min_available_vram_gb,
+            ram_shortage_gb=ram_shortage_gb,
+            vram_shortage_gb=vram_shortage_gb,
+            runtime_resources=runtime_resources,
+        )
+
+    def _mark_model_present(self, aivm_model_uuid: str) -> None:
+        with self._runtime_states_lock:
+            runtime_state = self._get_or_create_runtime_state(aivm_model_uuid)
+            runtime_state.is_cached_in_ram = True
+            runtime_state.is_loaded_in_vram = self._get_inference_device() == "gpu"
+            self._sync_runtime_state_residency(runtime_state)
+            runtime_state.inference_device = self._get_inference_device()
+            runtime_state.onnx_providers = self._get_provider_names()
+
+    def _mark_model_prefetched(self, aivm_model_uuid: str) -> None:
+        with self._runtime_states_lock:
+            runtime_state = self._get_or_create_runtime_state(aivm_model_uuid)
+            runtime_state.is_cached_in_ram = True
+            runtime_state.is_loaded_in_vram = False
+            self._sync_runtime_state_residency(runtime_state)
+            runtime_state.inference_device = self._get_inference_device()
+            runtime_state.onnx_providers = self._get_provider_names()
+
+    def _get_or_create_runtime_state(self, aivm_model_uuid: str) -> AivmModelRuntimeState:
+        runtime_state = self._runtime_states.get(aivm_model_uuid)
+        if runtime_state is None:
+            runtime_state = AivmModelRuntimeState(
+                model_uuid=aivm_model_uuid,
+                is_loaded=False,
+                is_cached_in_ram=False,
+                is_loaded_in_vram=False,
+                is_pinned=False,
+                residency="unloaded",
+                load_count=0,
+                inference_device=self._get_inference_device(),
+                onnx_providers=self._get_provider_names(),
+                last_loaded_at=None,
+                last_used_at=None,
+                last_unloaded_at=None,
+            )
+            self._runtime_states[aivm_model_uuid] = runtime_state
+        return runtime_state
+
+    def _mark_model_loaded(self, aivm_model_uuid: str) -> None:
+        with self._runtime_states_lock:
+            runtime_state = self._get_or_create_runtime_state(aivm_model_uuid)
+            runtime_state.is_cached_in_ram = True
+            runtime_state.is_loaded_in_vram = self._get_inference_device() == "gpu"
+            self._sync_runtime_state_residency(runtime_state)
+            runtime_state.load_count += 1
+            runtime_state.inference_device = self._get_inference_device()
+            runtime_state.onnx_providers = self._get_provider_names()
+            runtime_state.last_loaded_at = time.time()
+
+    def _mark_model_used(self, aivm_model_uuid: str) -> None:
+        with self._runtime_states_lock:
+            runtime_state = self._get_or_create_runtime_state(aivm_model_uuid)
+            runtime_state.is_cached_in_ram = True
+            runtime_state.is_loaded_in_vram = self._get_inference_device() == "gpu"
+            self._sync_runtime_state_residency(runtime_state)
+            runtime_state.inference_device = self._get_inference_device()
+            runtime_state.onnx_providers = self._get_provider_names()
+            runtime_state.last_used_at = time.time()
+
+    def _mark_model_unloaded(self, aivm_model_uuid: str) -> None:
+        with self._runtime_states_lock:
+            runtime_state = self._get_or_create_runtime_state(aivm_model_uuid)
+            runtime_state.is_cached_in_ram = False
+            runtime_state.is_loaded_in_vram = False
+            self._sync_runtime_state_residency(runtime_state)
+            runtime_state.last_unloaded_at = time.time()
+
+    def prefetch_model(self, aivm_model_uuid: str) -> AivmModelRuntimeState:
+        with self._tts_models_lock:
+            if aivm_model_uuid in self.tts_models:
+                self._mark_model_present(aivm_model_uuid)
+                runtime_state = self.get_model_runtime_state(aivm_model_uuid)
+                assert runtime_state is not None
+                return runtime_state
+
+        self._ensure_capacity_for_model_operation(
+            aivm_model_uuid,
+            needs_ram_cache=True,
+            needs_vram_load=False,
+        )
+        self._get_or_prefetch_model_artifacts(aivm_model_uuid)
+        self._mark_model_prefetched(aivm_model_uuid)
+        runtime_state = self.get_model_runtime_state(aivm_model_uuid)
+        assert runtime_state is not None
+        return runtime_state
+
+    def promote_model(self, aivm_model_uuid: str) -> AivmModelRuntimeState:
+        self._ensure_capacity_for_model_operation(
+            aivm_model_uuid,
+            needs_ram_cache=True,
+            needs_vram_load=(self._get_inference_device() == "gpu"),
+        )
+        self.load_model(aivm_model_uuid)
+        runtime_state = self.get_model_runtime_state(aivm_model_uuid)
+        assert runtime_state is not None
+        return runtime_state
+
+    def demote_model(self, aivm_model_uuid: str) -> AivmModelRuntimeState:
+        with self._tts_models_lock:
+            tts_model = self.tts_models.pop(aivm_model_uuid, None)
+
+        if tts_model is not None:
+            tts_model.unload()
+
+        with self._prefetched_model_artifacts_lock:
+            has_prefetched_artifacts = aivm_model_uuid in self._prefetched_model_artifacts
+
+        self.aivm_manager.update_model_load_state(aivm_model_uuid, is_loaded=False)
+
+        if has_prefetched_artifacts is True:
+            self._mark_model_prefetched(aivm_model_uuid)
+            with self._runtime_states_lock:
+                runtime_state = self._get_or_create_runtime_state(aivm_model_uuid)
+                runtime_state.last_unloaded_at = time.time()
+                return runtime_state.model_copy(deep=True)
+
+        self._mark_model_unloaded(aivm_model_uuid)
+        runtime_state = self.get_model_runtime_state(aivm_model_uuid)
+        assert runtime_state is not None
+        return runtime_state
+
+    def get_model_runtime_state(
+        self, aivm_model_uuid: str
+    ) -> AivmModelRuntimeState | None:
+        with self._runtime_states_lock:
+            runtime_state = self._runtime_states.get(aivm_model_uuid)
+            if runtime_state is None:
+                return None
+            return runtime_state.model_copy(deep=True)
+
+    def get_all_model_runtime_states(self) -> list[AivmModelRuntimeState]:
+        with self._runtime_states_lock:
+            runtime_states = [
+                runtime_state.model_copy(deep=True)
+                for runtime_state in self._runtime_states.values()
+            ]
+
+        runtime_states.sort(
+            key=lambda state: (
+                state.is_loaded,
+                state.last_used_at if state.last_used_at is not None else 0.0,
+                state.last_loaded_at if state.last_loaded_at is not None else 0.0,
+                state.model_uuid,
+            ),
+            reverse=True,
+        )
+        return runtime_states
+
+    def pin_model(self, aivm_model_uuid: str) -> AivmModelRuntimeState:
+        with self._runtime_states_lock:
+            runtime_state = self._get_or_create_runtime_state(aivm_model_uuid)
+            runtime_state.is_pinned = True
+            return runtime_state.model_copy(deep=True)
+
+    def unpin_model(self, aivm_model_uuid: str) -> AivmModelRuntimeState:
+        with self._runtime_states_lock:
+            runtime_state = self._get_or_create_runtime_state(aivm_model_uuid)
+            runtime_state.is_pinned = False
+            return runtime_state.model_copy(deep=True)
+
+    def get_runtime_policy(self) -> AivmModelRuntimePolicy:
+        with self._runtime_states_lock:
+            return self._runtime_policy.model_copy(deep=True)
+
+    def set_runtime_policy(
+        self,
+        max_loaded_models: int | None,
+        max_vram_loaded_models: int | None = None,
+        min_available_ram_gb: float | None = None,
+        min_available_vram_gb: float | None = None,
+    ) -> AivmModelRuntimePolicy:
+        if max_loaded_models is not None and max_loaded_models < 0:
+            raise ValueError("max_loaded_models must be greater than or equal to 0.")
+        if max_vram_loaded_models is not None and max_vram_loaded_models < 0:
+            raise ValueError("max_vram_loaded_models must be greater than or equal to 0.")
+        if min_available_ram_gb is not None and min_available_ram_gb < 0:
+            raise ValueError("min_available_ram_gb must be greater than or equal to 0.")
+        if min_available_vram_gb is not None and min_available_vram_gb < 0:
+            raise ValueError("min_available_vram_gb must be greater than or equal to 0.")
+
+        with self._runtime_states_lock:
+            self._runtime_policy = AivmModelRuntimePolicy(
+                max_loaded_models=max_loaded_models,
+                max_vram_loaded_models=max_vram_loaded_models,
+                min_available_ram_gb=min_available_ram_gb,
+                min_available_vram_gb=min_available_vram_gb,
+            )
+            return self._runtime_policy.model_copy(deep=True)
+
+    def _get_available_ram_gb(self) -> float:
+        return float(psutil.virtual_memory().available / (1024**3))
+
+    def _get_total_ram_gb(self) -> float:
+        return float(psutil.virtual_memory().total / (1024**3))
+
+    def _get_active_cuda_device_id(self) -> int | None:
+        for provider in self.onnx_providers:
+            if isinstance(provider, tuple) and provider[0] == "CUDAExecutionProvider":
+                device_id = provider[1].get("device_id", 0)
+                if isinstance(device_id, int):
+                    return device_id
+                return 0
+        return None
+
+    def _get_available_vram_gb(self) -> float | None:
+        device_id = self._get_active_cuda_device_id()
+        if device_id is None:
+            return None
+
+        try:
+            gpus = GPUtil.getGPUs()
+        except Exception as ex:
+            logger.warning("Failed to get GPU memory information.", exc_info=ex)
+            return None
+
+        if device_id >= len(gpus):
+            return None
+        return float(gpus[device_id].memoryFree / 1024)
+
+    def _get_total_vram_gb(self) -> float | None:
+        device_id = self._get_active_cuda_device_id()
+        if device_id is None:
+            return None
+
+        try:
+            gpus = GPUtil.getGPUs()
+        except Exception as ex:
+            logger.warning("Failed to get GPU total memory information.", exc_info=ex)
+            return None
+
+        if device_id >= len(gpus):
+            return None
+        return float(gpus[device_id].memoryTotal / 1024)
+
+    def get_runtime_resource_snapshot(self) -> AivmModelRuntimeResourceSnapshot:
+        installed_aivm_infos = self.aivm_manager.get_installed_aivm_infos()
+        model_resource_estimates = [
+            AivmModelResourceEstimate(
+                model_uuid=model_uuid,
+                estimated_ram_cache_size_gb=self._estimate_model_cache_size_gb(model_uuid),
+                estimated_vram_load_size_gb=self._estimate_model_cache_size_gb(model_uuid),
+            )
+            for model_uuid in installed_aivm_infos
+        ]
+        model_resource_estimates.sort(key=lambda estimate: estimate.model_uuid)
+
+        with self._runtime_states_lock:
+            loaded_model_count = sum(
+                1
+                for runtime_state in self._runtime_states.values()
+                if runtime_state.is_loaded is True
+            )
+            vram_loaded_model_count = sum(
+                1
+                for runtime_state in self._runtime_states.values()
+                if runtime_state.is_loaded_in_vram is True
+            )
+
+        return AivmModelRuntimeResourceSnapshot(
+            inference_device=self._get_inference_device(),
+            total_ram_gb=self._get_total_ram_gb(),
+            available_ram_gb=self._get_available_ram_gb(),
+            total_vram_gb=self._get_total_vram_gb(),
+            available_vram_gb=self._get_available_vram_gb(),
+            loaded_model_count=loaded_model_count,
+            vram_loaded_model_count=vram_loaded_model_count,
+            runtime_policy=self.get_runtime_policy(),
+            model_resource_estimates=model_resource_estimates,
+        )
+
+    def get_lru_demote_candidates(
+        self,
+        limit: int = 1,
+        exclude_aivm_model_uuids: set[str] | None = None,
+    ) -> list[AivmModelRuntimeState]:
+        exclude_model_uuids = exclude_aivm_model_uuids or set()
+
+        with self._runtime_states_lock:
+            runtime_states = [
+                runtime_state.model_copy(deep=True)
+                for runtime_state in self._runtime_states.values()
+                if runtime_state.is_loaded_in_vram is True
+                and runtime_state.is_pinned is False
+                and runtime_state.model_uuid not in exclude_model_uuids
+            ]
+
+        runtime_states.sort(
+            key=lambda state: (
+                state.last_used_at is not None,
+                state.last_used_at if state.last_used_at is not None else 0.0,
+                state.last_loaded_at if state.last_loaded_at is not None else 0.0,
+                state.load_count,
+                state.model_uuid,
+            )
+        )
+        return runtime_states[:limit]
+
+    def get_lru_unload_candidates(
+        self,
+        limit: int = 1,
+        exclude_aivm_model_uuids: set[str] | None = None,
+    ) -> list[AivmModelRuntimeState]:
+        exclude_model_uuids = exclude_aivm_model_uuids or set()
+
+        with self._runtime_states_lock:
+            runtime_states = [
+                runtime_state.model_copy(deep=True)
+                for runtime_state in self._runtime_states.values()
+                if runtime_state.is_loaded is True
+                and runtime_state.is_pinned is False
+                and runtime_state.model_uuid not in exclude_model_uuids
+            ]
+
+        runtime_states.sort(
+            key=lambda state: (
+                state.last_used_at is not None,
+                state.last_used_at if state.last_used_at is not None else 0.0,
+                state.last_loaded_at if state.last_loaded_at is not None else 0.0,
+                state.load_count,
+                state.model_uuid,
+            )
+        )
+        return runtime_states[:limit]
+
+    def evict_lru_models(
+        self,
+        max_loaded_models: int,
+        exclude_aivm_model_uuids: set[str] | None = None,
+    ) -> list[AivmModelRuntimeState]:
+        if max_loaded_models < 0:
+            raise ValueError("max_loaded_models must be greater than or equal to 0.")
+
+        exclude_model_uuids = exclude_aivm_model_uuids or set()
+
+        with self._runtime_states_lock:
+            loaded_model_count = sum(
+                1
+                for runtime_state in self._runtime_states.values()
+                if runtime_state.is_loaded is True
+                and runtime_state.is_pinned is False
+                and runtime_state.model_uuid not in exclude_model_uuids
+            )
+
+        unload_count = max(0, loaded_model_count - max_loaded_models)
+        if unload_count == 0:
+            return []
+
+        candidates = self.get_lru_unload_candidates(
+            limit=unload_count,
+            exclude_aivm_model_uuids=exclude_model_uuids,
+        )
+
+        evicted_runtime_states: list[AivmModelRuntimeState] = []
+        for candidate in candidates:
+            self.unload_model(candidate.model_uuid)
+            runtime_state = self.get_model_runtime_state(candidate.model_uuid)
+            assert runtime_state is not None
+            evicted_runtime_states.append(runtime_state)
+
+        return evicted_runtime_states
+
+    def demote_lru_models(
+        self,
+        max_vram_loaded_models: int,
+        exclude_aivm_model_uuids: set[str] | None = None,
+    ) -> list[AivmModelRuntimeState]:
+        if max_vram_loaded_models < 0:
+            raise ValueError("max_vram_loaded_models must be greater than or equal to 0.")
+
+        exclude_model_uuids = exclude_aivm_model_uuids or set()
+
+        with self._runtime_states_lock:
+            loaded_model_count = sum(
+                1
+                for runtime_state in self._runtime_states.values()
+                if runtime_state.is_loaded_in_vram is True
+                and runtime_state.is_pinned is False
+                and runtime_state.model_uuid not in exclude_model_uuids
+            )
+
+        demote_count = max(0, loaded_model_count - max_vram_loaded_models)
+        if demote_count == 0:
+            return []
+
+        candidates = self.get_lru_demote_candidates(
+            limit=demote_count,
+            exclude_aivm_model_uuids=exclude_model_uuids,
+        )
+
+        demoted_runtime_states: list[AivmModelRuntimeState] = []
+        for candidate in candidates:
+            demoted_runtime_states.append(self.demote_model(candidate.model_uuid))
+
+        return demoted_runtime_states
+
+    def demote_models_to_free_vram(
+        self,
+        min_available_vram_gb: float,
+        exclude_aivm_model_uuids: set[str] | None = None,
+    ) -> list[AivmModelRuntimeState]:
+        if min_available_vram_gb < 0:
+            raise ValueError("min_available_vram_gb must be greater than or equal to 0.")
+
+        excluded_model_uuids = set(exclude_aivm_model_uuids or set())
+        demoted_runtime_states: list[AivmModelRuntimeState] = []
+
+        while True:
+            available_vram_gb = self._get_available_vram_gb()
+            if available_vram_gb is None or available_vram_gb >= min_available_vram_gb:
+                return demoted_runtime_states
+
+            candidates = self.get_lru_demote_candidates(
+                limit=1,
+                exclude_aivm_model_uuids=excluded_model_uuids,
+            )
+            if len(candidates) == 0:
+                return demoted_runtime_states
+
+            candidate = candidates[0]
+            excluded_model_uuids.add(candidate.model_uuid)
+            demoted_runtime_states.append(self.demote_model(candidate.model_uuid))
+
+    def evict_models_to_free_ram(
+        self,
+        min_available_ram_gb: float,
+        exclude_aivm_model_uuids: set[str] | None = None,
+    ) -> list[AivmModelRuntimeState]:
+        if min_available_ram_gb < 0:
+            raise ValueError("min_available_ram_gb must be greater than or equal to 0.")
+
+        excluded_model_uuids = set(exclude_aivm_model_uuids or set())
+        evicted_runtime_states: list[AivmModelRuntimeState] = []
+
+        while True:
+            available_ram_gb = self._get_available_ram_gb()
+            if available_ram_gb >= min_available_ram_gb:
+                return evicted_runtime_states
+
+            candidates = self.get_lru_unload_candidates(
+                limit=1,
+                exclude_aivm_model_uuids=excluded_model_uuids,
+            )
+            if len(candidates) == 0:
+                return evicted_runtime_states
+
+            candidate = candidates[0]
+            excluded_model_uuids.add(candidate.model_uuid)
+            self.unload_model(candidate.model_uuid)
+            runtime_state = self.get_model_runtime_state(candidate.model_uuid)
+            assert runtime_state is not None
+            evicted_runtime_states.append(runtime_state)
+
+    def apply_runtime_policy(
+        self, exclude_aivm_model_uuids: set[str] | None = None
+    ) -> list[AivmModelRuntimeState]:
+        runtime_policy = self.get_runtime_policy()
+        affected_runtime_states: dict[str, AivmModelRuntimeState] = {}
+
+        if runtime_policy.max_vram_loaded_models is not None:
+            for runtime_state in self.demote_lru_models(
+                max_vram_loaded_models=runtime_policy.max_vram_loaded_models,
+                exclude_aivm_model_uuids=exclude_aivm_model_uuids,
+            ):
+                affected_runtime_states[runtime_state.model_uuid] = runtime_state
+
+        if runtime_policy.min_available_vram_gb is not None:
+            for runtime_state in self.demote_models_to_free_vram(
+                min_available_vram_gb=runtime_policy.min_available_vram_gb,
+                exclude_aivm_model_uuids=exclude_aivm_model_uuids,
+            ):
+                affected_runtime_states[runtime_state.model_uuid] = runtime_state
+
+        if runtime_policy.max_loaded_models is not None:
+            for runtime_state in self.evict_lru_models(
+                max_loaded_models=runtime_policy.max_loaded_models,
+                exclude_aivm_model_uuids=exclude_aivm_model_uuids,
+            ):
+                affected_runtime_states[runtime_state.model_uuid] = runtime_state
+
+        if runtime_policy.min_available_ram_gb is not None:
+            for runtime_state in self.evict_models_to_free_ram(
+                min_available_ram_gb=runtime_policy.min_available_ram_gb,
+                exclude_aivm_model_uuids=exclude_aivm_model_uuids,
+            ):
+                affected_runtime_states[runtime_state.model_uuid] = runtime_state
+
+        return list(affected_runtime_states.values())
+
     def _load_bert_model_and_tokenizer(self) -> None:
         """BERT モデルとトークナイザーをロードし、ローカルキャッシュを更新する。"""
         onnx_bert_models.load_model(
@@ -281,54 +967,47 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         # 既に読み込まれている場合はそのまま返す
         with self._tts_models_lock:
             if aivm_model_uuid in self.tts_models:
-                return self.tts_models[aivm_model_uuid]
+                tts_model = self.tts_models[aivm_model_uuid]
+            else:
+                tts_model = None
+        if tts_model is not None:
+            self._mark_model_present(aivm_model_uuid)
+            return tts_model
 
         # AIVM メタデータを読み込む
         aivm_info = self.aivm_manager.get_aivm_info(aivm_model_uuid)
-        try:
-            with open(aivm_info.file_path, mode="rb") as f:
-                aivm_metadata = aivmlib.read_aivmx_metadata(f)
-        except aivmlib.AivmValidationError as ex:
-            logger.error(
-                f"{aivm_info.file_path}: Failed to read AIVM metadata:", exc_info=ex
-            )
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to read AIVM metadata.",
-            ) from ex
-
-        # ハイパーパラメータを読み込む
-        hyper_parameters = HyperParameters.model_validate(
-            aivm_metadata.hyper_parameters.model_dump()
-        )
-
-        # スタイルベクトルを読み込む
-        assert aivm_metadata.style_vectors is not None
-        style_vectors = np.load(BytesIO(aivm_metadata.style_vectors))
+        artifacts = self._get_or_prefetch_model_artifacts(aivm_model_uuid)
 
         # 音声合成モデルをロード
         tts_model = TTSModel(
             # 音声合成モデルのパスとして、AIVMX ファイル (ONNX 互換) のパスを指定
             model_path=aivm_info.file_path,
             # config_path とあるが、HyperParameters の Pydantic モデルを直接指定できる
-            config_path=hyper_parameters,
+            config_path=artifacts.hyper_parameters,
             # style_vec_path とあるが、style_vectors の NDArray を直接指定できる
-            style_vec_path=style_vectors,
+            style_vec_path=artifacts.style_vectors,
             # ONNX 推論で利用する ExecutionProvider を指定
             onnx_providers=self.onnx_providers,
         )  # fmt: skip
         start_time = time.time()
         logger.info(f"Loading {aivm_info.manifest.name} ({aivm_model_uuid}) ...")
         tts_model.load()
+        loaded_model = tts_model
         with self._tts_models_lock:
             # ロード中に別スレッドが同一モデルを先にロードした場合は、そのインスタンスを優先して利用する
             if aivm_model_uuid in self.tts_models:
                 logger.info(
                     f"{aivm_info.manifest.name} ({aivm_model_uuid}) is already loaded in another thread. Using existing instance.",
                 )
-                return self.tts_models[aivm_model_uuid]
-            self.tts_models[aivm_model_uuid] = tts_model
+                loaded_model = self.tts_models[aivm_model_uuid]
+            else:
+                self.tts_models[aivm_model_uuid] = loaded_model
+                loaded_model = None
+        if loaded_model is not None:
+            self._mark_model_present(aivm_model_uuid)
+            return loaded_model
         self.aivm_manager.update_model_load_state(aivm_model_uuid, is_loaded=True)
+        self._mark_model_loaded(aivm_model_uuid)
         logger.info(
             f"{aivm_info.manifest.name} ({aivm_model_uuid}) loaded. ({time.time() - start_time:.2f}s)"
         )
@@ -356,17 +1035,23 @@ class StyleBertVITS2TTSEngine(TTSEngine):
                 logger.warning(
                     f"TTS model {aivm_info.manifest.name} ({aivm_model_uuid}) is already unloaded. Skipping unload.",
                 )
+                with self._prefetched_model_artifacts_lock:
+                    self._prefetched_model_artifacts.pop(aivm_model_uuid, None)
                 self.aivm_manager.update_model_load_state(
                     aivm_model_uuid,
                     is_loaded=False,
                 )
+                self._mark_model_unloaded(aivm_model_uuid)
                 return
             tts_model = self.tts_models[aivm_model_uuid]
             del self.tts_models[aivm_model_uuid]
 
         # モデルをアンロード
         tts_model.unload()
+        with self._prefetched_model_artifacts_lock:
+            self._prefetched_model_artifacts.pop(aivm_model_uuid, None)
         self.aivm_manager.update_model_load_state(aivm_model_uuid, is_loaded=False)
+        self._mark_model_unloaded(aivm_model_uuid)
         logger.info(
             f"{aivm_info.manifest.name} ({aivm_model_uuid}) unloaded. ({time.time() - start_time:.2f}s)"
         )
@@ -706,6 +1391,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
 
         # 音声合成モデルをロード (初回のみ)
         model = self.load_model(str(aivm_manifest.uuid))
+        self._mark_model_used(str(aivm_manifest.uuid))
         logger.info(f"Model: {aivm_manifest.name} / Version {aivm_manifest.version}")  # fmt: skip
         logger.info(f"Speaker: {aivm_manifest_speaker.name} / Style: {aivm_manifest_speaker_style.name}")  # fmt: skip
 
@@ -821,6 +1507,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
 
         # 生成した音声の音量調整/サンプルレート変更/ステレオ化を行ってから返す
         wave = raw_wave_to_output_wave(query, raw_wave, raw_sample_rate)
+        self.apply_runtime_policy()
         return wave
 
     def initialize_synthesis(self, style_id: StyleId, skip_reinit: bool) -> None:
