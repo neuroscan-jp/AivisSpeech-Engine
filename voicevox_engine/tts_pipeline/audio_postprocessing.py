@@ -1,5 +1,7 @@
 """音声波形を加工する。"""
 
+from collections.abc import Iterator
+
 import numpy as np
 from numpy.typing import NDArray
 from soxr import resample
@@ -18,6 +20,21 @@ def raw_wave_to_output_wave(
     wave = _apply_output_sampling_rate(wave, sr_wave, query)
     wave = _apply_output_stereo(wave, query)
     return wave
+
+
+def output_wave_to_pcm_chunks(
+    wave: NDArray[np.float32], *, frames_per_chunk: int = 4096
+) -> Iterator[bytes]:
+    """出力音声波形を little-endian signed 16-bit PCM chunk に変換する。"""
+    if frames_per_chunk <= 0:
+        raise ValueError("frames_per_chunk must be greater than 0")
+
+    total_frames = wave.shape[0]
+    for start in range(0, total_frames, frames_per_chunk):
+        wave_chunk = np.clip(wave[start : start + frames_per_chunk], -1.0, 1.0)
+        pcm_chunk = np.rint(wave_chunk * 32767.0).astype("<i2", copy=False).tobytes()
+        if pcm_chunk:
+            yield pcm_chunk
 
 
 def _apply_volume_scale(

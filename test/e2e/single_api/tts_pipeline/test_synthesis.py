@@ -76,3 +76,41 @@ def test_post_synthesis_old_audio_query_200(
     assert response.headers["content-type"] == "audio/wav"
     # AivisSpeech Engine の音声合成は常にある程度のランダム性があるため、テストではハッシュ値の比較は行わない
     # assert snapshot == hash_wave_floats_from_wav_bytes(response.read())
+
+
+def test_post_synthesis_pcm_200(client: TestClient) -> None:
+    query = {
+        "accent_phrases": [
+            {
+                "moras": [
+                    gen_mora("テ", "t", 0.0, "e", 0.0, 0.0),
+                    gen_mora("ス", "s", 0.0, "U", 0.0, 0.0),
+                    gen_mora("ト", "t", 0.0, "o", 0.0, 0.0),
+                ],
+                "accent": 1,
+                "pause_mora": None,
+                "is_interrogative": False,
+            }
+        ],
+        "speedScale": 1.0,
+        "pitchScale": 1.0,
+        "intonationScale": 1.0,
+        "volumeScale": 1.0,
+        "prePhonemeLength": 0.1,
+        "postPhonemeLength": 0.1,
+        "pauseLength": None,
+        "pauseLengthScale": 1.0,
+        "outputSamplingRate": 44100,
+        "outputStereo": False,
+        "kana": "テスト",
+    }
+    response = client.post("/synthesis_pcm", params={"speaker": 888753760}, json=query)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/octet-stream"
+    assert response.headers["x-aivisspeech-sample-rate"] == "44100"
+    assert response.headers["x-aivisspeech-channels"] == "1"
+    assert response.headers["x-aivisspeech-sample-width"] == "2"
+    assert response.headers["x-aivisspeech-pcm-format"] == "s16le"
+    assert len(response.content) > 0
+    assert len(response.content) % 2 == 0

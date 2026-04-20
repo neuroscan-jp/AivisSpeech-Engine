@@ -6,7 +6,7 @@ from typing import Annotated, Self
 
 import soundfile
 from fastapi import APIRouter, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from pydantic.json_schema import SkipJsonSchema
 
@@ -32,6 +32,7 @@ from voicevox_engine.tts_pipeline.model import (
 )
 from voicevox_engine.tts_pipeline.song_engine import SongEngineManager
 from voicevox_engine.tts_pipeline.tts_engine import LATEST_VERSION, TTSEngineManager
+from voicevox_engine.tts_pipeline.audio_postprocessing import output_wave_to_pcm_chunks
 
 
 class ParseKanaBadRequest(BaseModel):
@@ -312,6 +313,54 @@ def generate_tts_pipeline_router(
         )
 
         return Response(buffer.getvalue(), media_type="audio/wav")
+
+    @router.post(
+        "/synthesis_pcm",
+        response_class=StreamingResponse,
+        responses={
+            200: {
+                "content": {
+                    "application/octet-stream": {
+                        "schema": {"type": "string", "format": "binary"}
+                    }
+                },
+            }
+        },
+        tags=["音声合成"],
+        summary="音声合成する (PCM ストリーム)",
+    )
+    def synthesis_pcm(
+        query: AudioQuery,
+        style_id: Annotated[StyleId, Query(alias="speaker")],
+        enable_interrogative_upspeak: bool = Query(  # noqa: B008
+            default=True,
+            description="AivisSpeech Engine ではサポートされていないパラメータです (常に無視されます) 。",
+        ),
+        core_version: Annotated[
+            str | SkipJsonSchema[None],
+            Query(
+                description="AivisSpeech Engine ではサポートされていないパラメータです (常に無視されます) 。"
+            ),
+        ] = None,  # fmt: skip # noqa
+    ) -> StreamingResponse:
+        """指定されたスタイル ID に紐づく音声合成モデルで PCM ストリームを返します。"""
+        version = core_version or LATEST_VERSION
+        engine = tts_engines.get_tts_engine(version)
+        wave = engine.synthesize_wave(
+            query, style_id, enable_interrogative_upspeak=enable_interrogative_upspeak
+        )
+        channels = 1 if wave.ndim == 1 else wave.shape[1]
+
+        return StreamingResponse(
+            output_wave_to_pcm_chunks(wave),
+            media_type="application/octet-stream",
+            headers={
+                "x-aivisspeech-sample-rate": str(query.outputSamplingRate),
+                "x-aivisspeech-channels": str(channels),
+                "x-aivisspeech-sample-width": "2",
+                "x-aivisspeech-pcm-format": "s16le",
+            },
+        )
 
     @router.post(
         "/cancellable_synthesis",
