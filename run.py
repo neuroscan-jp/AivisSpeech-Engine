@@ -47,7 +47,7 @@ from voicevox_engine import __version__
 from voicevox_engine.aivm_manager import AivmManager
 from voicevox_engine.app.application import generate_app
 from voicevox_engine.cancellable_engine import CancellableEngine
-from voicevox_engine.core.core_initializer import MOCK_VER, initialize_cores
+from voicevox_engine.core.core_initializer import initialize_cores
 from voicevox_engine.engine_manifest import load_manifest
 from voicevox_engine.library.library_manager import LibraryManager
 from voicevox_engine.logging import LOGGING_CONFIG, logger
@@ -58,12 +58,20 @@ from voicevox_engine.tts_pipeline.song_engine import make_song_engines_from_core
 from voicevox_engine.tts_pipeline.tts_engine import TTSEngineManager
 from voicevox_engine.user_dict.user_dict_manager import UserDictionary
 from voicevox_engine.utility.aivishub_client import AivisHubClient
+from voicevox_engine.utility.core_version_utility import MOCK_CORE_VERSION
 from voicevox_engine.utility.path_utility import (
     engine_manifest_path,
     engine_root,
     get_save_dir,
 )
+from voicevox_engine.utility.sentry_utility import filter_sentry_event
 from voicevox_engine.utility.user_agent_utility import collect_runtime_environment
+
+# Uvicorn でバインドするアドレスを "localhost" にすることで IPv4 (127.0.0.1) と IPv6 ([::1]) の両方でリッスンできます.
+# これは Uvicorn のドキュメントに記載されていない挙動です; 将来のアップデートにより動作しなくなる可能性があります.
+# ref: https://github.com/VOICEVOX/voicevox_engine/pull/647#issuecomment-1540204653
+_DEFAULT_HOST = "localhost"
+_DEFAULT_PORT = 10101
 
 
 def decide_boolean_from_env(env_name: str) -> bool:
@@ -75,16 +83,37 @@ def decide_boolean_from_env(env_name: str) -> bool:
     * それ以外はwarningを出してFalseを返す
     """
     env = os.getenv(env_name, default="")
-    if env == "1":
-        return True
-    elif env == "" or env == "0":
-        return False
-    else:
-        warnings.warn(
-            f"Invalid environment variable value: {env_name}={env}",
-            stacklevel=1,
-        )
-        return False
+    match env:
+        case "1":
+            return True
+        case "" | "0":
+            return False
+        case _:
+            msg = f"Invalid environment variable value: {env_name}={env}"
+            warnings.warn(msg, stacklevel=1)
+            return False
+
+
+def decide_port_from_env(env_name: str) -> int | None:
+    """
+    環境変数からポート番号を返す。
+
+    * 環境変数が0から65535の範囲の整数と解釈可能ならその数を返す
+    * 環境変数が空白か存在しないならNoneを返す
+    * それ以外はwarningを出してNoneを返す
+    """
+    env = os.getenv(env_name)
+    if env is None or env == "":
+        return None
+    try:
+        port = int(env)
+        if 0 <= port <= 65535:
+            return port
+    except ValueError:
+        pass
+    msg = f"Invalid environment variable value: {env_name}={env}"
+    warnings.warn(msg, stacklevel=1)
+    return None
 
 
 @dataclass(frozen=True)
@@ -95,6 +124,9 @@ class Envs:
     cpu_num_threads: str | None
     env_preset_path: str | None
     disable_mutable_api: bool
+    host: str | None
+    port: int | None
+    use_gpu: bool
 
 
 _env_adapter = TypeAdapter(Envs)
@@ -107,6 +139,9 @@ def read_environment_variables() -> Envs:
         cpu_num_threads=os.getenv("VV_CPU_NUM_THREADS"),
         env_preset_path=os.getenv("VV_PRESET_FILE"),
         disable_mutable_api=decide_boolean_from_env("VV_DISABLE_MUTABLE_API"),
+        host=os.getenv("VV_HOST"),
+        port=decide_port_from_env("VV_PORT"),
+        use_gpu=decide_boolean_from_env("VV_USE_GPU"),
     )
     return _env_adapter.validate_python(asdict(envs))
 
@@ -172,9 +207,9 @@ def select_first_not_none_or_none(candidates: list[S | None]) -> S | None:
 
 @dataclass(frozen=True)
 class _CLIArgs:
-    host: str
-    port: int
-    use_gpu: bool
+    host: str | None
+    port: int | None
+    use_gpu: bool | None
     load_all_models: bool
     output_log_utf8: bool
     cors_policy_mode: CorsPolicyMode | None
@@ -202,22 +237,23 @@ def read_cli_arguments(envs: Envs) -> _CLIArgs:
     parser = argparse.ArgumentParser(
         description="AivisSpeech Engine: AI Voice Imitation System - Text to Speech Engine"
     )
-    # Uvicorn でバインドするアドレスを "localhost" にすることで IPv4 (127.0.0.1) と IPv6 ([::1]) の両方でリッスンできます.
-    # これは Uvicorn のドキュメントに記載されていない挙動です; 将来のアップデートにより動作しなくなる可能性があります.
-    # ref: https://github.com/VOICEVOX/voicevox_engine/pull/647#issuecomment-1540204653
     parser.add_argument(
         "--host",
         type=str,
-        default="localhost",
-        help="接続を受け付けるホストアドレスです。",
+        help="接続を受け付けるホストアドレスです。指定しない場合、代わりに環境変数 VV_HOST の値が使われます。",
     )
     parser.add_argument(
-        "--port", type=int, default=10101, help="接続を受け付けるポート番号です。"
+        "--port",
+        type=int,
+        help="接続を受け付けるポート番号です。指定しない場合、代わりに環境変数 VV_PORT の値が使われます。",
     )
     parser.add_argument(
         "--use_gpu",
-        action="store_true",
-        help="対応している場合、GPU を使い音声合成処理を行います。",
+        action=argparse.BooleanOptionalAction,
+        help=(
+            "GPUを使って音声合成するか設定します。指定しない場合、代わりに環境変数 VV_USE_GPU の値が使われます。"
+            "VV_USE_GPU の値が1の場合はGPUを使用し、0または空文字、値がない場合は使用されません。"
+        ),
     )
     # parser.add_argument(
     #     "--voicevox_dir",
@@ -286,7 +322,7 @@ def read_cli_arguments(envs: Envs) -> _CLIArgs:
     parser.add_argument(
         "--cors_policy_mode",
         type=CorsPolicyMode,
-        choices=list(CorsPolicyMode),
+        choices=[i.value for i in CorsPolicyMode],
         default=None,
         help=(
             "CORS の許可モード。all または localapps が指定できます。all はすべてを許可します。"
@@ -373,29 +409,32 @@ def main() -> None:
     if args.output_log_utf8:
         set_output_log_utf8()
 
+    use_gpu = select_first_not_none([args.use_gpu, envs.use_gpu])
+
     # この PC の動作環境情報を取得
     # 起動時の可能な限り早い段階で実行結果をキャッシュしておくのが重要
     runtime_environment = collect_runtime_environment(
-        inference_type="GPU" if args.use_gpu is True else "CPU"
+        inference_type="GPU" if use_gpu is True else "CPU"
     )
+
+    # AivisHub API クライアントを初期化
+    ## except ブロックからも参照されるため、try の外で生成する
+    aivishub_client = AivisHubClient()
 
     try:
         # Sentry によるエラートラッキングを開始 (production 環境のみ有効)
         # ref: https://docs.sentry.io/platforms/python/integrations/fastapi/
         if not args.disable_sentry and __version__ != "latest":
             sentry_sdk.init(
-                dsn="https://ebdf5cc288b3ab31a262186329ff3a95@o4508551725383680.ingest.us.sentry.io/4508555159470080",
+                dsn="https://943843f6560b3d03b1b86dbb7ec8d363@o4508551725383680.ingest.us.sentry.io/4508555159470080",
                 release=f"AivisSpeech-Engine@{__version__}",
                 environment="production",
-                # Set traces_sample_rate to 1.0 to capture 100%
-                # of transactions for tracing.
-                traces_sample_rate=1.0,
-                _experiments={
-                    # Set continuous_profiling_auto_start to True
-                    # to automatically start the profiler on when
-                    # possible.
-                    "continuous_profiling_auto_start": True,
-                },
+                # ユーザー環境だけで発生する既知エラーは送信前に破棄する
+                ## Sentry 側で受信後に除外してもクォータは消費されるため、SDK 側で止める
+                before_send=filter_sentry_event,
+                # ローカルアプリではエラー以外の利用状況まで収集しない
+                ## トレースとプロファイルは別クォータだが、費用対効果が低いため明示的に無効化する
+                traces_sample_rate=0.0,
             )
 
         logger.info(f"AivisSpeech Engine version {__version__}")
@@ -405,7 +444,10 @@ def main() -> None:
         logger.info(f"User data directory: {get_save_dir()}")
 
         # AivmManager を初期化
-        aivm_manager = AivmManager(get_save_dir() / "Models")
+        aivm_manager = AivmManager(
+            get_save_dir() / "Models",
+            aivishub_client=aivishub_client,
+        )
 
         # ごく稀に style_bert_vits2_tts_engine.py (が依存する onnxruntime) のインポート自体に失敗し
         # 例外が発生する環境があるようなので、例外をキャッチしてエラーログに出力できるよう、敢えてルーター初期化時にインポートする
@@ -416,12 +458,12 @@ def main() -> None:
         # AivisSpeech Engine 独自の StyleBertVITS2TTSEngine を通常の TTSEngine の代わりに利用
         tts_engines = TTSEngineManager()
         tts_engines.register_engine(
-            StyleBertVITS2TTSEngine(aivm_manager, args.use_gpu, args.load_all_models),
-            MOCK_VER,
+            StyleBertVITS2TTSEngine(aivm_manager, use_gpu, args.load_all_models),
+            MOCK_CORE_VERSION,
         )
 
         core_manager = initialize_cores(
-            use_gpu=args.use_gpu,
+            use_gpu=use_gpu,
             voicelib_dirs=args.voicelib_dirs,
             voicevox_dir=args.voicevox_dir,
             runtime_dirs=args.runtime_dirs,
@@ -438,7 +480,7 @@ def main() -> None:
         if args.enable_cancellable_synthesis:
             cancellable_engine = CancellableEngine(
                 init_processes=args.init_processes,
-                use_gpu=args.use_gpu,
+                use_gpu=use_gpu,
                 voicelib_dirs=args.voicelib_dirs,
                 voicevox_dir=args.voicevox_dir,
                 runtime_dirs=args.runtime_dirs,
@@ -450,6 +492,9 @@ def main() -> None:
         settings = setting_loader.load()
 
         # 複数方式で指定可能な場合、優先度は上から「引数」「環境変数」「設定ファイル」「デフォルト値」
+
+        host = select_first_not_none([args.host, envs.host, _DEFAULT_HOST])
+        port = select_first_not_none([args.port, envs.port, _DEFAULT_PORT])
 
         cors_policy_mode = select_first_not_none(
             [args.cors_policy_mode, settings.cors_policy_mode]
@@ -492,10 +537,7 @@ def main() -> None:
         if not character_info_dir.exists():
             character_info_dir = root_dir / "speaker_info"
 
-        if args.disable_mutable_api:
-            disable_mutable_api = True
-        else:
-            disable_mutable_api = envs.disable_mutable_api
+        disable_mutable_api = args.disable_mutable_api or envs.disable_mutable_api
 
         # ASGI に準拠した AivisSpeech Engine アプリケーションを生成する
         app = generate_app(
@@ -521,24 +563,24 @@ def main() -> None:
         # エンジンが正常に起動したことを AivisHub へ通知する
         # イベント送信時にいかなるエラーが発生してもエラーはメソッド内で吸収されるため、起動処理には影響を与えない
         if runtime_environment is not None:
-            AivisHubClient.send_event(
+            aivishub_client.send_event(
                 event_type="Startup",
                 runtime_environment=runtime_environment,
             )
 
         # AivisSpeech Engine サーバーを起動
         # NOTE: デフォルトは ASGI に準拠した HTTP/1.1 サーバー
-        uvicorn.run(app, host=args.host, port=args.port, log_config=LOGGING_CONFIG)
+        uvicorn.run(app, host=host, port=port, log_config=LOGGING_CONFIG)
 
-    except Exception as e:
+    except Exception as ex:
         # 起動時にエラーが発生した場合、スタックトレースを取得した上で起動失敗イベントを AivisHub へ通知する
-        AivisHubClient.send_event(
+        aivishub_client.send_event(
             event_type="StartupFailed",
             runtime_environment=runtime_environment,
             stack_trace=traceback.format_exc(),
         )
-        logger.error("Unexpected error occurred during engine startup:", exc_info=e)
-        raise e
+        logger.error("Unexpected error occurred during engine startup:", exc_info=ex)
+        raise
 
 
 if __name__ == "__main__":

@@ -43,7 +43,7 @@ from ..aivm_manager import AivmManager
 from ..core.core_adapter import CoreAdapter, DeviceSupport
 from ..dev.core.mock import MockCoreWrapper
 from ..logging import logger
-from ..metas.Metas import StyleId
+from ..metas.metas import StyleId
 from ..model import (
     AivmModelAdmissionDecision,
     AivmModelResourceEstimate,
@@ -80,19 +80,25 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         "tsukumijima/deberta-v2-large-japanese-char-wwm-onnx"
     )
     # BERT モデルの固定リビジョン
-    BERT_MODEL_REVISION: Final[str] = "d701ec67708287b20d2063270f6b535e6eed09ab"
-    # BERT モデルのキャッシュディレクトリ
-    BERT_MODEL_CACHE_DIR: Final[Path] = get_save_dir() / "BertModelCaches"
+    BERT_MODEL_REVISION: Final[str] = "5e5cc2b628d083d0a815c4d4a4c3fe84a414f8ed"
 
     def __init__(
         self,
         aivm_manager: AivmManager,
         use_gpu: bool = False,
         load_all_models: bool = False,
+        bert_model_cache_dir: Path | None = None,
     ) -> None:
         self.aivm_manager = aivm_manager
         self.use_gpu = use_gpu
         self.load_all_models = load_all_models
+
+        # BERT モデルのキャッシュディレクトリ
+        self._bert_model_cache_dir = (
+            bert_model_cache_dir
+            if bert_model_cache_dir is not None
+            else get_save_dir() / "BertModelCaches"
+        )
 
         # ロード済みモデルのキャッシュ
         self.tts_models: dict[str, TTSModel] = {}
@@ -177,7 +183,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         ## これにより、BERT モデルのファイルサイズとメモリ使用量が半分に削減される
         ## ref: https://huggingface.co/tsukumijima/deberta-v2-large-japanese-char-wwm-onnx
         OLD_BERT_MODEL_CACHE_PATH = (
-            self.BERT_MODEL_CACHE_DIR
+            self._bert_model_cache_dir
             / "models--tsukumijima--deberta-v2-large-japanese-char-wwm-onnx"
             / "blobs"
             / "c5c880ef4bd0d3308ec6503a8728efae920bc5c5a984de4f76fc3d0ad518a2ec"
@@ -896,22 +902,22 @@ class StyleBertVITS2TTSEngine(TTSEngine):
             language=Languages.JP,
             pretrained_model_name_or_path=self.BERT_MODEL_REPOSITORY,
             onnx_providers=self.onnx_providers,
-            cache_dir=str(self.BERT_MODEL_CACHE_DIR),
+            cache_dir=str(self._bert_model_cache_dir),
             revision=self.BERT_MODEL_REVISION,
         )
         onnx_bert_models.load_tokenizer(
             language=Languages.JP,
             pretrained_model_name_or_path=self.BERT_MODEL_REPOSITORY,
-            cache_dir=str(self.BERT_MODEL_CACHE_DIR),
+            cache_dir=str(self._bert_model_cache_dir),
             revision=self.BERT_MODEL_REVISION,
         )
 
     def _reset_bert_model_cache(self) -> None:
         """BERT モデルのキャッシュディレクトリを削除し、再ダウンロードが可能な状態に戻す。"""
-        if self.BERT_MODEL_CACHE_DIR.exists() is True:
+        if self._bert_model_cache_dir.exists() is True:
             try:
-                shutil.rmtree(self.BERT_MODEL_CACHE_DIR)
-                logger.info(f"BERT model cache cleared. ({self.BERT_MODEL_CACHE_DIR})")
+                shutil.rmtree(self._bert_model_cache_dir)
+                logger.info(f"BERT model cache cleared. ({self._bert_model_cache_dir})")
             except OSError as ex:
                 logger.error(
                     "Failed to clear BERT model cache.",
@@ -1075,7 +1081,12 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         with self._tts_models_lock:
             return aivm_model_uuid in self.tts_models
 
-    def create_accent_phrases(self, text: str, style_id: StyleId) -> list[AccentPhrase]:
+    def create_accent_phrases(
+        self,
+        text: str,
+        style_id: StyleId,
+        enable_katakana_english: bool,
+    ) -> list[AccentPhrase]:
         """
         テキストからアクセント句系列を生成する。
         継承元の TTSEngine.create_accent_phrases() をオーバーライドし、Style-Bert-VITS2 に適したアクセント句系列生成処理に差し替えている。
@@ -1093,6 +1104,9 @@ class StyleBertVITS2TTSEngine(TTSEngine):
             テキスト
         style_id : StyleId
             スタイル ID
+        enable_katakana_english : bool
+            読みが不明な英単語をカタカナ読みにするかどうか。
+            AivisSpeech Engine では常に無視される互換用パラメータ。
 
         Returns
         -------
@@ -1286,7 +1300,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         self,
         query: AudioQuery,
         style_id: StyleId,
-        enable_interrogative_upspeak: bool = True,
+        enable_interrogative_upspeak: bool,
     ) -> NDArray[np.float32]:
         """
         音声合成用のクエリに含まれる読み仮名に基づいて Style-Bert-VITS2 で音声波形を生成する。
@@ -1298,7 +1312,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
             音声合成用のクエリ
         style_id : StyleId
             スタイル ID
-        enable_interrogative_upspeak : bool, optional
+        enable_interrogative_upspeak : bool
             疑問文の場合に抑揚を上げるかどうか (VOICEVOX ENGINE との互換性維持のためのパラメータ、常に無視される)
 
         Returns

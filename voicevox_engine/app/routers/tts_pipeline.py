@@ -2,6 +2,7 @@
 
 import io
 import zipfile
+from traceback import print_exception
 from typing import Annotated, Self
 
 import soundfile
@@ -12,7 +13,7 @@ from pydantic.json_schema import SkipJsonSchema
 
 from voicevox_engine.cancellable_engine import CancellableEngine
 from voicevox_engine.core.core_adapter import DeviceSupport
-from voicevox_engine.metas.Metas import StyleId
+from voicevox_engine.metas.metas import StyleId
 from voicevox_engine.model import AudioQuery
 from voicevox_engine.preset.preset_manager import (
     PresetInputError,
@@ -86,6 +87,12 @@ def generate_tts_pipeline_router(
     def audio_query(
         text: str,
         style_id: Annotated[StyleId, Query(alias="speaker")],
+        enable_katakana_english: Annotated[
+            bool,
+            Query(
+                description="AivisSpeech Engine ではサポートされていないパラメータです (常に無視されます) 。"
+            ),
+        ] = True,  # fmt: skip # noqa
         core_version: Annotated[
             str | SkipJsonSchema[None],
             Query(
@@ -96,10 +103,14 @@ def generate_tts_pipeline_router(
         """
         音声合成用のクエリの初期値を得ます。ここで得られたクエリはそのまま音声合成に利用できます。<br>
         各値の意味は `Schemas` を参照してください。
+
+        AivisSpeech Engine では英単語は常に自動的に自然なカタカナ読みに変換されて読み上げられる仕様のため、enable_katakana_english は指定不要です（常に無視されます）。
         """
         version = core_version or LATEST_VERSION
         engine = tts_engines.get_tts_engine(version)
-        accent_phrases = engine.create_accent_phrases(text, style_id)
+        accent_phrases = engine.create_accent_phrases(
+            text, style_id, enable_katakana_english
+        )
         return AudioQuery(
             accent_phrases=accent_phrases,
             speedScale=1.0,
@@ -125,6 +136,12 @@ def generate_tts_pipeline_router(
     def audio_query_from_preset(
         text: str,
         preset_id: int,
+        enable_katakana_english: Annotated[
+            bool,
+            Query(
+                description="AivisSpeech Engine ではサポートされていないパラメータです (常に無視されます) 。"
+            ),
+        ] = True,  # fmt: skip # noqa
         core_version: Annotated[
             str | SkipJsonSchema[None],
             Query(
@@ -135,6 +152,8 @@ def generate_tts_pipeline_router(
         """
         音声合成用のクエリの初期値を得ます。ここで得られたクエリはそのまま音声合成に利用できます。<br>
         各値の意味は `Schemas` を参照してください。
+
+        AivisSpeech Engine では英単語は常に自動的に自然なカタカナ読みに変換されて読み上げられる仕様のため、enable_katakana_english は指定不要です（常に無視されます）。
         """
         version = core_version or LATEST_VERSION
         engine = tts_engines.get_tts_engine(version)
@@ -143,7 +162,8 @@ def generate_tts_pipeline_router(
         except PresetInputError as e:
             raise HTTPException(status_code=422, detail=str(e)) from e
         except PresetInternalError as e:
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            print_exception(e)
+            raise HTTPException(status_code=500) from e
         for preset in presets:
             if preset.id == preset_id:
                 selected_preset = preset
@@ -153,7 +173,9 @@ def generate_tts_pipeline_router(
                 status_code=422, detail="該当するプリセットIDが見つかりません"
             )
 
-        accent_phrases = engine.create_accent_phrases(text, selected_preset.style_id)
+        accent_phrases = engine.create_accent_phrases(
+            text, selected_preset.style_id, enable_katakana_english
+        )
         return AudioQuery(
             accent_phrases=accent_phrases,
             speedScale=selected_preset.speedScale,
@@ -186,6 +208,12 @@ def generate_tts_pipeline_router(
         text: str,
         style_id: Annotated[StyleId, Query(alias="speaker")],
         is_kana: bool = False,
+        enable_katakana_english: Annotated[
+            bool,
+            Query(
+                description="AivisSpeech Engine ではサポートされていないパラメータです (常に無視されます) 。"
+            ),
+        ] = True,  # fmt: skip # noqa
         core_version: Annotated[
             str | SkipJsonSchema[None],
             Query(
@@ -201,6 +229,8 @@ def generate_tts_pipeline_router(
         * カナの手前に`_`を入れるとそのカナは無声化される
         * アクセント位置を`'`で指定する。全てのアクセント句にはアクセント位置を1つ指定する必要がある。
         * アクセント句末に`？`(全角)を入れることにより疑問文の発音ができる。
+
+        AivisSpeech Engine では英単語は常に自動的に自然なカタカナ読みに変換されて読み上げられる仕様のため、enable_katakana_english は指定不要です（常に無視されます）。
         """
         version = core_version or LATEST_VERSION
         engine = tts_engines.get_tts_engine(version)
@@ -212,7 +242,7 @@ def generate_tts_pipeline_router(
                     status_code=400, detail=ParseKanaBadRequest(e).model_dump()
                 ) from e
         else:
-            return engine.create_accent_phrases(text, style_id)
+            return engine.create_accent_phrases(text, style_id, enable_katakana_english)
 
     @router.post(
         "/mora_data",
@@ -287,10 +317,12 @@ def generate_tts_pipeline_router(
     def synthesis(
         query: AudioQuery,
         style_id: Annotated[StyleId, Query(alias="speaker")],
-        enable_interrogative_upspeak: bool = Query(  # noqa: B008
-            default=True,
-            description="AivisSpeech Engine ではサポートされていないパラメータです (常に無視されます) 。",
-        ),
+        enable_interrogative_upspeak: Annotated[
+            bool,
+            Query(
+                description="AivisSpeech Engine ではサポートされていないパラメータです (常に無視されます) 。"
+            ),
+        ] = True,  # fmt: skip # noqa
         core_version: Annotated[
             str | SkipJsonSchema[None],
             Query(
@@ -380,6 +412,12 @@ def generate_tts_pipeline_router(
         query: AudioQuery,
         request: Request,
         style_id: Annotated[StyleId, Query(alias="speaker")],
+        enable_interrogative_upspeak: Annotated[
+            bool,
+            Query(
+                description="AivisSpeech Engine ではサポートされていないパラメータです (常に無視されます) 。"
+            ),
+        ] = True,  # fmt: skip # noqa
         core_version: Annotated[
             str | SkipJsonSchema[None],
             Query(
@@ -400,10 +438,15 @@ def generate_tts_pipeline_router(
         try:
             version = core_version or LATEST_VERSION
             f_name = cancellable_engine.synthesize_wave(
-                query, style_id, request, version=version
+                query,
+                style_id,
+                enable_interrogative_upspeak=enable_interrogative_upspeak,
+                request=request,
+                version=version,
             )
         except CancellableEngineInternalError as e:
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            print_exception(e)
+            raise HTTPException(status_code=500) from e
 
         if f_name == "":
             raise HTTPException(status_code=422, detail="不明なバージョンです")
@@ -425,7 +468,10 @@ def generate_tts_pipeline_router(
                         "schema": {"type": "string", "format": "binary"}
                     }
                 },
-            }
+            },
+            422: {
+                "description": "クエリが空またはサンプリングレートが不一致",
+            },
         },
         tags=["音声合成"],
         summary="複数まとめて音声合成する",
@@ -433,6 +479,12 @@ def generate_tts_pipeline_router(
     def multi_synthesis(
         queries: list[AudioQuery],
         style_id: Annotated[StyleId, Query(alias="speaker")],
+        enable_interrogative_upspeak: Annotated[
+            bool,
+            Query(
+                description="AivisSpeech Engine ではサポートされていないパラメータです (常に無視されます) 。"
+            ),
+        ] = True,  # fmt: skip # noqa
         core_version: Annotated[
             str | SkipJsonSchema[None],
             Query(
@@ -442,6 +494,11 @@ def generate_tts_pipeline_router(
     ) -> Response:
         version = core_version or LATEST_VERSION
         engine = tts_engines.get_tts_engine(version)
+        if len(queries) == 0:
+            raise HTTPException(
+                status_code=422,
+                detail="音声合成クエリが空です",
+            )
         sampling_rate = queries[0].outputSamplingRate
 
         buffer = io.BytesIO()
@@ -454,7 +511,11 @@ def generate_tts_pipeline_router(
                     )
 
                 wav_file_buffer = io.BytesIO()
-                wave = engine.synthesize_wave(queries[i], style_id)
+                wave = engine.synthesize_wave(
+                    queries[i],
+                    style_id,
+                    enable_interrogative_upspeak=enable_interrogative_upspeak,
+                )
                 soundfile.write(
                     file=wav_file_buffer,
                     data=wave,
