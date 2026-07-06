@@ -19,7 +19,7 @@ from style_bert_vits2.constants import DEFAULT_SDP_RATIO, DEFAULT_STYLE_WEIGHT
 
 from voicevox_engine.aivm_manager import AivmManager
 from voicevox_engine.metas.metas import StyleId
-from voicevox_engine.model import AudioQuery
+from voicevox_engine.model import AivmModelRuntimeState, AudioQuery
 from voicevox_engine.tts_pipeline.model import AccentPhrase, Mora
 from voicevox_engine.tts_pipeline.style_bert_vits2_tts_engine import (
     StyleBertVITS2TTSEngine,
@@ -100,7 +100,7 @@ class _StyleBertVITS2TTSEngineForTest(StyleBertVITS2TTSEngine):
 
     def apply_runtime_policy(
         self, exclude_aivm_model_uuids: set[str] | None = None
-    ) -> list:
+    ) -> list[AivmModelRuntimeState]:
         """ランタイム状態管理はこのテストでは検査対象外のため何もしない。"""
 
         return []

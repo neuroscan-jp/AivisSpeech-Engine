@@ -555,9 +555,9 @@ class StyleBertVITS2TTSEngine(TTSEngine):
                 return runtime_state.model_copy(deep=True)
 
         self._mark_model_unloaded(aivm_model_uuid)
-        runtime_state = self.get_model_runtime_state(aivm_model_uuid)
-        assert runtime_state is not None
-        return runtime_state
+        demoted_runtime_state = self.get_model_runtime_state(aivm_model_uuid)
+        assert demoted_runtime_state is not None
+        return demoted_runtime_state
 
     def get_model_runtime_state(
         self, aivm_model_uuid: str

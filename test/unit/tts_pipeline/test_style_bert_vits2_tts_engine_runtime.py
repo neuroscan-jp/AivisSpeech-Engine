@@ -64,7 +64,7 @@ def _create_engine_with_runtime_states(
             "Manager",
             (),
             {
-                "get_aivm_info": lambda self, aivm_model_uuid: AivmInfo.model_construct(
+                "get_aivm_info": lambda self, aivm_model_uuid: AivmInfo.model_construct(  # type: ignore[call-arg]
                     file_size=1024**3,
                 ),
                 "get_installed_aivm_infos": lambda self: {},
@@ -187,10 +187,7 @@ def test_evict_lru_models_unloads_only_excess_loaded_models() -> None:
         "older-used",
     ]
     assert all(state.is_loaded is False for state in evicted_states)
-    assert (
-        cast(AivmModelRuntimeState, engine._runtime_states["recently-used"]).is_loaded
-        is True
-    )
+    assert engine._runtime_states["recently-used"].is_loaded is True
 
 
 def test_evict_lru_models_respects_exclude_list() -> None:
@@ -227,10 +224,7 @@ def test_evict_lru_models_respects_exclude_list() -> None:
     )
 
     assert [state.model_uuid for state in evicted_states] == ["candidate-a"]
-    assert (
-        cast(AivmModelRuntimeState, engine._runtime_states["candidate-b"]).is_loaded
-        is True
-    )
+    assert engine._runtime_states["candidate-b"].is_loaded is True
 
 
 def test_get_lru_unload_candidates_skips_pinned_models() -> None:
@@ -552,7 +546,7 @@ def test_get_runtime_resource_snapshot_returns_current_resources_and_estimates()
                     "ram-a": object(),
                     "vram-a": object(),
                 },
-                "get_aivm_info": lambda self, aivm_model_uuid: AivmInfo.model_construct(
+                "get_aivm_info": lambda self, aivm_model_uuid: AivmInfo.model_construct(  # type: ignore[call-arg]
                     file_size=1610612736 if aivm_model_uuid == "ram-a" else 2147483648,
                 ),
             },
@@ -641,7 +635,9 @@ def test_mark_model_loaded_uses_vram_residency_on_gpu() -> None:
 def test_prefetch_model_marks_ram_cache_without_vram_on_cpu() -> None:
     engine = _create_engine_with_runtime_states({})
 
-    engine._get_or_prefetch_model_artifacts = lambda aivm_model_uuid: object()  # type: ignore[method-assign]
+    engine._get_or_prefetch_model_artifacts = lambda aivm_model_uuid: cast(
+        Any, object()
+    )  # type: ignore[method-assign]
 
     runtime_state = engine.prefetch_model("model-a")
 
@@ -655,7 +651,9 @@ def test_prefetch_model_marks_ram_cache_without_vram_on_gpu() -> None:
     engine = _create_engine_with_runtime_states({})
     engine.onnx_providers = [("CUDAExecutionProvider", {"device_id": 0})]
 
-    engine._get_or_prefetch_model_artifacts = lambda aivm_model_uuid: object()  # type: ignore[method-assign]
+    engine._get_or_prefetch_model_artifacts = lambda aivm_model_uuid: cast(
+        Any, object()
+    )  # type: ignore[method-assign]
 
     runtime_state = engine.prefetch_model("model-a")
 
@@ -726,8 +724,8 @@ def test_demote_model_keeps_ram_cache_after_gpu_load() -> None:
         }
     )
     engine.onnx_providers = [("CUDAExecutionProvider", {"device_id": 0})]
-    engine.tts_models = {"model-a": cast(object, object())}  # type: ignore[assignment]
-    engine._prefetched_model_artifacts = {"model-a": cast(object, object())}  # type: ignore[assignment]
+    engine.tts_models = cast(Any, {"model-a": object()})
+    engine._prefetched_model_artifacts = cast(Any, {"model-a": object()})
 
     class _Unloadable:
         def __init__(self) -> None:

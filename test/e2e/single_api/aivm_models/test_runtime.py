@@ -10,7 +10,7 @@ def _get_first_aivm_model_uuid(client: TestClient) -> str:
     assert response.status_code == 200
     installed_models = response.json()
     assert len(installed_models) > 0
-    return next(iter(installed_models.keys()))
+    return str(next(iter(installed_models.keys())))
 
 
 def test_get_model_runtime_state_200_for_unloaded_model(client: TestClient) -> None:
