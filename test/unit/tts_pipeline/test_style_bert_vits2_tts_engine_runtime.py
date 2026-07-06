@@ -74,6 +74,10 @@ def _create_engine_with_runtime_states(
     return engine
 
 
+def _fake_get_or_prefetch_model_artifacts(_aivm_model_uuid: str) -> Any:
+    return cast(Any, object())
+
+
 def test_get_lru_unload_candidates_returns_oldest_loaded_models_first() -> None:
     engine = _create_engine_with_runtime_states(
         {
@@ -635,9 +639,7 @@ def test_mark_model_loaded_uses_vram_residency_on_gpu() -> None:
 def test_prefetch_model_marks_ram_cache_without_vram_on_cpu() -> None:
     engine = _create_engine_with_runtime_states({})
 
-    engine._get_or_prefetch_model_artifacts = lambda aivm_model_uuid: cast(
-        Any, object()
-    )  # type: ignore[method-assign]
+    engine._get_or_prefetch_model_artifacts = _fake_get_or_prefetch_model_artifacts  # type: ignore[method-assign,assignment]
 
     runtime_state = engine.prefetch_model("model-a")
 
@@ -651,9 +653,7 @@ def test_prefetch_model_marks_ram_cache_without_vram_on_gpu() -> None:
     engine = _create_engine_with_runtime_states({})
     engine.onnx_providers = [("CUDAExecutionProvider", {"device_id": 0})]
 
-    engine._get_or_prefetch_model_artifacts = lambda aivm_model_uuid: cast(
-        Any, object()
-    )  # type: ignore[method-assign]
+    engine._get_or_prefetch_model_artifacts = _fake_get_or_prefetch_model_artifacts  # type: ignore[method-assign,assignment]
 
     runtime_state = engine.prefetch_model("model-a")
 
