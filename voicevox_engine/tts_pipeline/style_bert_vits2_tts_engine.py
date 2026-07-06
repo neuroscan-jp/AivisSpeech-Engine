@@ -11,8 +11,8 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Final, Literal
 
-import GPUtil
 import aivmlib
+import GPUtil
 import jaconv
 import numpy as np
 import onnxruntime
@@ -345,7 +345,10 @@ class StyleBertVITS2TTSEngine(TTSEngine):
                     "the current runtime policy."
                 ),
             )
-        if admission_decision.vram_shortage_gb is not None and admission_decision.vram_shortage_gb > 0:
+        if (
+            admission_decision.vram_shortage_gb is not None
+            and admission_decision.vram_shortage_gb > 0
+        ):
             raise HTTPException(
                 status_code=507,
                 detail=(
@@ -359,12 +362,19 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         aivm_model_uuid: str,
         operation: Literal["prefetch", "promote"],
     ) -> AivmModelAdmissionDecision:
+        """指定されたモデル操作を現在の資源状況で受け入れ可能かどうかを判定する。"""
         runtime_state = self.get_model_runtime_state(aivm_model_uuid)
         runtime_resources = self.get_runtime_resource_snapshot()
-        estimated_ram_cache_size_gb = self._estimate_model_cache_size_gb(aivm_model_uuid)
-        estimated_vram_load_size_gb = self._estimate_model_cache_size_gb(aivm_model_uuid)
+        estimated_ram_cache_size_gb = self._estimate_model_cache_size_gb(
+            aivm_model_uuid
+        )
+        estimated_vram_load_size_gb = self._estimate_model_cache_size_gb(
+            aivm_model_uuid
+        )
 
-        needs_ram_cache = runtime_state is None or runtime_state.is_cached_in_ram is False
+        needs_ram_cache = (
+            runtime_state is None or runtime_state.is_cached_in_ram is False
+        )
         needs_vram_load = (
             operation == "promote"
             and self._get_inference_device() == "gpu"
@@ -381,17 +391,30 @@ class StyleBertVITS2TTSEngine(TTSEngine):
                 estimated_vram_load_size_gb if needs_vram_load is True else 0.0
             )
 
-        required_min_available_ram_gb = runtime_resources.runtime_policy.min_available_ram_gb
-        required_min_available_vram_gb = runtime_resources.runtime_policy.min_available_vram_gb
+        required_min_available_ram_gb = (
+            runtime_resources.runtime_policy.min_available_ram_gb
+        )
+        required_min_available_vram_gb = (
+            runtime_resources.runtime_policy.min_available_vram_gb
+        )
         ram_shortage_gb = 0.0
         if required_min_available_ram_gb is not None:
-            ram_shortage_gb = max(0.0, required_min_available_ram_gb - predicted_available_ram_gb)
+            ram_shortage_gb = max(
+                0.0, required_min_available_ram_gb - predicted_available_ram_gb
+            )
 
         vram_shortage_gb: float | None = None
-        if required_min_available_vram_gb is not None and predicted_available_vram_gb is not None:
-            vram_shortage_gb = max(0.0, required_min_available_vram_gb - predicted_available_vram_gb)
+        if (
+            required_min_available_vram_gb is not None
+            and predicted_available_vram_gb is not None
+        ):
+            vram_shortage_gb = max(
+                0.0, required_min_available_vram_gb - predicted_available_vram_gb
+            )
 
-        can_admit = ram_shortage_gb == 0.0 and (vram_shortage_gb is None or vram_shortage_gb == 0.0)
+        can_admit = ram_shortage_gb == 0.0 and (
+            vram_shortage_gb is None or vram_shortage_gb == 0.0
+        )
 
         return AivmModelAdmissionDecision(
             model_uuid=aivm_model_uuid,
@@ -426,7 +449,9 @@ class StyleBertVITS2TTSEngine(TTSEngine):
             runtime_state.inference_device = self._get_inference_device()
             runtime_state.onnx_providers = self._get_provider_names()
 
-    def _get_or_create_runtime_state(self, aivm_model_uuid: str) -> AivmModelRuntimeState:
+    def _get_or_create_runtime_state(
+        self, aivm_model_uuid: str
+    ) -> AivmModelRuntimeState:
         runtime_state = self._runtime_states.get(aivm_model_uuid)
         if runtime_state is None:
             runtime_state = AivmModelRuntimeState(
@@ -476,6 +501,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
             runtime_state.last_unloaded_at = time.time()
 
     def prefetch_model(self, aivm_model_uuid: str) -> AivmModelRuntimeState:
+        """指定された音声合成モデルを RAM にプリフェッチする。"""
         with self._tts_models_lock:
             if aivm_model_uuid in self.tts_models:
                 self._mark_model_present(aivm_model_uuid)
@@ -495,6 +521,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         return runtime_state
 
     def promote_model(self, aivm_model_uuid: str) -> AivmModelRuntimeState:
+        """指定された音声合成モデルを推論用にロードする。"""
         self._ensure_capacity_for_model_operation(
             aivm_model_uuid,
             needs_ram_cache=True,
@@ -506,6 +533,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         return runtime_state
 
     def demote_model(self, aivm_model_uuid: str) -> AivmModelRuntimeState:
+        """指定された音声合成モデルを推論デバイスから降格し、必要なら RAM キャッシュのみ残す。"""
         with self._tts_models_lock:
             tts_model = self.tts_models.pop(aivm_model_uuid, None)
 
@@ -513,7 +541,9 @@ class StyleBertVITS2TTSEngine(TTSEngine):
             tts_model.unload()
 
         with self._prefetched_model_artifacts_lock:
-            has_prefetched_artifacts = aivm_model_uuid in self._prefetched_model_artifacts
+            has_prefetched_artifacts = (
+                aivm_model_uuid in self._prefetched_model_artifacts
+            )
 
         self.aivm_manager.update_model_load_state(aivm_model_uuid, is_loaded=False)
 
@@ -532,6 +562,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
     def get_model_runtime_state(
         self, aivm_model_uuid: str
     ) -> AivmModelRuntimeState | None:
+        """指定された音声合成モデルのランタイム状態を返す。"""
         with self._runtime_states_lock:
             runtime_state = self._runtime_states.get(aivm_model_uuid)
             if runtime_state is None:
@@ -539,6 +570,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
             return runtime_state.model_copy(deep=True)
 
     def get_all_model_runtime_states(self) -> list[AivmModelRuntimeState]:
+        """管理対象の全音声合成モデルのランタイム状態一覧を返す。"""
         with self._runtime_states_lock:
             runtime_states = [
                 runtime_state.model_copy(deep=True)
@@ -557,18 +589,21 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         return runtime_states
 
     def pin_model(self, aivm_model_uuid: str) -> AivmModelRuntimeState:
+        """指定された音声合成モデルを eviction 対象から保護する。"""
         with self._runtime_states_lock:
             runtime_state = self._get_or_create_runtime_state(aivm_model_uuid)
             runtime_state.is_pinned = True
             return runtime_state.model_copy(deep=True)
 
     def unpin_model(self, aivm_model_uuid: str) -> AivmModelRuntimeState:
+        """指定された音声合成モデルの pin を解除する。"""
         with self._runtime_states_lock:
             runtime_state = self._get_or_create_runtime_state(aivm_model_uuid)
             runtime_state.is_pinned = False
             return runtime_state.model_copy(deep=True)
 
     def get_runtime_policy(self) -> AivmModelRuntimePolicy:
+        """現在のランタイム運用ポリシーを返す。"""
         with self._runtime_states_lock:
             return self._runtime_policy.model_copy(deep=True)
 
@@ -579,14 +614,19 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         min_available_ram_gb: float | None = None,
         min_available_vram_gb: float | None = None,
     ) -> AivmModelRuntimePolicy:
+        """ランタイム運用ポリシーを更新する。"""
         if max_loaded_models is not None and max_loaded_models < 0:
             raise ValueError("max_loaded_models must be greater than or equal to 0.")
         if max_vram_loaded_models is not None and max_vram_loaded_models < 0:
-            raise ValueError("max_vram_loaded_models must be greater than or equal to 0.")
+            raise ValueError(
+                "max_vram_loaded_models must be greater than or equal to 0."
+            )
         if min_available_ram_gb is not None and min_available_ram_gb < 0:
             raise ValueError("min_available_ram_gb must be greater than or equal to 0.")
         if min_available_vram_gb is not None and min_available_vram_gb < 0:
-            raise ValueError("min_available_vram_gb must be greater than or equal to 0.")
+            raise ValueError(
+                "min_available_vram_gb must be greater than or equal to 0."
+            )
 
         with self._runtime_states_lock:
             self._runtime_policy = AivmModelRuntimePolicy(
@@ -643,12 +683,17 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         return float(gpus[device_id].memoryTotal / 1024)
 
     def get_runtime_resource_snapshot(self) -> AivmModelRuntimeResourceSnapshot:
+        """音声合成モデル運用に関する現在のリソース状況を返す。"""
         installed_aivm_infos = self.aivm_manager.get_installed_aivm_infos()
         model_resource_estimates = [
             AivmModelResourceEstimate(
                 model_uuid=model_uuid,
-                estimated_ram_cache_size_gb=self._estimate_model_cache_size_gb(model_uuid),
-                estimated_vram_load_size_gb=self._estimate_model_cache_size_gb(model_uuid),
+                estimated_ram_cache_size_gb=self._estimate_model_cache_size_gb(
+                    model_uuid
+                ),
+                estimated_vram_load_size_gb=self._estimate_model_cache_size_gb(
+                    model_uuid
+                ),
             )
             for model_uuid in installed_aivm_infos
         ]
@@ -683,6 +728,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         limit: int = 1,
         exclude_aivm_model_uuids: set[str] | None = None,
     ) -> list[AivmModelRuntimeState]:
+        """VRAM 降格候補となるモデルを LRU 順に返す。"""
         exclude_model_uuids = exclude_aivm_model_uuids or set()
 
         with self._runtime_states_lock:
@@ -710,6 +756,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         limit: int = 1,
         exclude_aivm_model_uuids: set[str] | None = None,
     ) -> list[AivmModelRuntimeState]:
+        """アンロード候補となるモデルを LRU 順に返す。"""
         exclude_model_uuids = exclude_aivm_model_uuids or set()
 
         with self._runtime_states_lock:
@@ -737,6 +784,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         max_loaded_models: int,
         exclude_aivm_model_uuids: set[str] | None = None,
     ) -> list[AivmModelRuntimeState]:
+        """ロード済みモデル数が上限を超えないよう LRU 順にアンロードする。"""
         if max_loaded_models < 0:
             raise ValueError("max_loaded_models must be greater than or equal to 0.")
 
@@ -774,8 +822,11 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         max_vram_loaded_models: int,
         exclude_aivm_model_uuids: set[str] | None = None,
     ) -> list[AivmModelRuntimeState]:
+        """VRAM ロード済みモデル数が上限を超えないよう LRU 順に降格する。"""
         if max_vram_loaded_models < 0:
-            raise ValueError("max_vram_loaded_models must be greater than or equal to 0.")
+            raise ValueError(
+                "max_vram_loaded_models must be greater than or equal to 0."
+            )
 
         exclude_model_uuids = exclude_aivm_model_uuids or set()
 
@@ -808,8 +859,11 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         min_available_vram_gb: float,
         exclude_aivm_model_uuids: set[str] | None = None,
     ) -> list[AivmModelRuntimeState]:
+        """空き VRAM が下限を下回らないようモデルを降格する。"""
         if min_available_vram_gb < 0:
-            raise ValueError("min_available_vram_gb must be greater than or equal to 0.")
+            raise ValueError(
+                "min_available_vram_gb must be greater than or equal to 0."
+            )
 
         excluded_model_uuids = set(exclude_aivm_model_uuids or set())
         demoted_runtime_states: list[AivmModelRuntimeState] = []
@@ -835,6 +889,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
         min_available_ram_gb: float,
         exclude_aivm_model_uuids: set[str] | None = None,
     ) -> list[AivmModelRuntimeState]:
+        """空き RAM が下限を下回らないようモデルをアンロードする。"""
         if min_available_ram_gb < 0:
             raise ValueError("min_available_ram_gb must be greater than or equal to 0.")
 
@@ -863,6 +918,7 @@ class StyleBertVITS2TTSEngine(TTSEngine):
     def apply_runtime_policy(
         self, exclude_aivm_model_uuids: set[str] | None = None
     ) -> list[AivmModelRuntimeState]:
+        """現在のランタイム運用ポリシーに従ってモデルの降格・アンロードを実行する。"""
         runtime_policy = self.get_runtime_policy()
         affected_runtime_states: dict[str, AivmModelRuntimeState] = {}
 

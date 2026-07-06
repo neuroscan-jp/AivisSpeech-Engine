@@ -3,9 +3,14 @@
 import threading
 from typing import Any, Literal, cast
 
+import pytest
 from fastapi import HTTPException
 
-from voicevox_engine.model import AivmInfo, AivmModelRuntimePolicy, AivmModelRuntimeState
+from voicevox_engine.model import (
+    AivmInfo,
+    AivmModelRuntimePolicy,
+    AivmModelRuntimeState,
+)
 from voicevox_engine.tts_pipeline.style_bert_vits2_tts_engine import (
     StyleBertVITS2TTSEngine,
 )
@@ -27,7 +32,11 @@ def _create_runtime_state(
         is_cached_in_ram=is_loaded,
         is_loaded_in_vram=(residency == "vram"),
         is_pinned=is_pinned,
-        residency=(residency if residency is not None else ("ram" if is_loaded is True else "unloaded")),
+        residency=(
+            residency
+            if residency is not None
+            else ("ram" if is_loaded is True else "unloaded")
+        ),
         load_count=load_count,
         inference_device="cpu",
         onnx_providers=["CPUExecutionProvider"] if is_loaded is True else [],
@@ -178,7 +187,10 @@ def test_evict_lru_models_unloads_only_excess_loaded_models() -> None:
         "older-used",
     ]
     assert all(state.is_loaded is False for state in evicted_states)
-    assert cast(AivmModelRuntimeState, engine._runtime_states["recently-used"]).is_loaded is True
+    assert (
+        cast(AivmModelRuntimeState, engine._runtime_states["recently-used"]).is_loaded
+        is True
+    )
 
 
 def test_evict_lru_models_respects_exclude_list() -> None:
@@ -215,7 +227,10 @@ def test_evict_lru_models_respects_exclude_list() -> None:
     )
 
     assert [state.model_uuid for state in evicted_states] == ["candidate-a"]
-    assert cast(AivmModelRuntimeState, engine._runtime_states["candidate-b"]).is_loaded is True
+    assert (
+        cast(AivmModelRuntimeState, engine._runtime_states["candidate-b"]).is_loaded
+        is True
+    )
 
 
 def test_get_lru_unload_candidates_skips_pinned_models() -> None:
@@ -499,7 +514,9 @@ def test_apply_runtime_policy_combines_resource_thresholds() -> None:
     }
 
 
-def test_get_runtime_resource_snapshot_returns_current_resources_and_estimates() -> None:
+def test_get_runtime_resource_snapshot_returns_current_resources_and_estimates() -> (
+    None
+):
     engine = _create_engine_with_runtime_states(
         {
             "ram-a": _create_runtime_state(
@@ -531,7 +548,10 @@ def test_get_runtime_resource_snapshot_returns_current_resources_and_estimates()
             "Manager",
             (),
             {
-                "get_installed_aivm_infos": lambda self: {"ram-a": object(), "vram-a": object()},
+                "get_installed_aivm_infos": lambda self: {
+                    "ram-a": object(),
+                    "vram-a": object(),
+                },
                 "get_aivm_info": lambda self, aivm_model_uuid: AivmInfo.model_construct(
                     file_size=1610612736 if aivm_model_uuid == "ram-a" else 2147483648,
                 ),
@@ -549,7 +569,10 @@ def test_get_runtime_resource_snapshot_returns_current_resources_and_estimates()
     assert snapshot.loaded_model_count == 2
     assert snapshot.vram_loaded_model_count == 1
     assert snapshot.runtime_policy.min_available_ram_gb == 2.0
-    assert [estimate.model_uuid for estimate in snapshot.model_resource_estimates] == ["ram-a", "vram-a"]
+    assert [estimate.model_uuid for estimate in snapshot.model_resource_estimates] == [
+        "ram-a",
+        "vram-a",
+    ]
     assert snapshot.model_resource_estimates[0].estimated_ram_cache_size_gb == 1.5
     assert snapshot.model_resource_estimates[1].estimated_vram_load_size_gb == 2.0
 
@@ -668,12 +691,10 @@ def test_prefetch_model_raises_when_ram_policy_cannot_be_satisfied() -> None:
     engine._get_available_ram_gb = lambda: 2.5  # type: ignore[method-assign]
     engine.apply_runtime_policy = lambda exclude_aivm_model_uuids=None: []  # type: ignore[method-assign]
 
-    try:
+    with pytest.raises(HTTPException) as exc_info:
         engine.prefetch_model("model-a")
-        assert False, "HTTPException was not raised"
-    except HTTPException as ex:
-        assert ex.status_code == 507
-        assert "Insufficient RAM capacity" in str(ex.detail)
+    assert exc_info.value.status_code == 507
+    assert "Insufficient RAM capacity" in str(exc_info.value.detail)
 
 
 def test_promote_model_raises_when_vram_policy_cannot_be_satisfied() -> None:
@@ -685,12 +706,10 @@ def test_promote_model_raises_when_vram_policy_cannot_be_satisfied() -> None:
     engine._get_available_vram_gb = lambda: 2.0  # type: ignore[method-assign]
     engine.apply_runtime_policy = lambda exclude_aivm_model_uuids=None: []  # type: ignore[method-assign]
 
-    try:
+    with pytest.raises(HTTPException) as exc_info:
         engine.promote_model("model-a")
-        assert False, "HTTPException was not raised"
-    except HTTPException as ex:
-        assert ex.status_code == 507
-        assert "Insufficient VRAM capacity" in str(ex.detail)
+    assert exc_info.value.status_code == 507
+    assert "Insufficient VRAM capacity" in str(exc_info.value.detail)
 
 
 def test_demote_model_keeps_ram_cache_after_gpu_load() -> None:
@@ -719,7 +738,14 @@ def test_demote_model_keeps_ram_cache_after_gpu_load() -> None:
 
     unloadable = _Unloadable()
     engine.tts_models = {"model-a": cast(object, unloadable)}  # type: ignore[assignment]
-    engine.aivm_manager = cast(Any, type("Manager", (), {"update_model_load_state": lambda self, aivm_model_uuid, is_loaded: None})())
+    engine.aivm_manager = cast(
+        Any,
+        type(
+            "Manager",
+            (),
+            {"update_model_load_state": lambda self, aivm_model_uuid, is_loaded: None},
+        )(),
+    )
 
     runtime_state = engine.demote_model("model-a")
 
@@ -749,7 +775,14 @@ def test_demote_model_without_ram_cache_becomes_unloaded() -> None:
             return None
 
     engine.tts_models = {"model-a": cast(object, _Unloadable())}  # type: ignore[assignment]
-    engine.aivm_manager = cast(Any, type("Manager", (), {"update_model_load_state": lambda self, aivm_model_uuid, is_loaded: None})())
+    engine.aivm_manager = cast(
+        Any,
+        type(
+            "Manager",
+            (),
+            {"update_model_load_state": lambda self, aivm_model_uuid, is_loaded: None},
+        )(),
+    )
 
     runtime_state = engine.demote_model("model-a")
 

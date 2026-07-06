@@ -95,6 +95,16 @@ class _StyleBertVITS2TTSEngineForTest(StyleBertVITS2TTSEngine):
 
         return self.recording_tts_model
 
+    def _mark_model_used(self, aivm_model_uuid: str) -> None:
+        """ランタイム状態管理はこのテストでは検査対象外のため何もしない。"""
+
+    def apply_runtime_policy(
+        self, exclude_aivm_model_uuids: set[str] | None = None
+    ) -> list:
+        """ランタイム状態管理はこのテストでは検査対象外のため何もしない。"""
+
+        return []
+
 
 def _generate_style_bert_vits2_tts_engine(
     recording_tts_model: _RecordingTTSModel,

@@ -283,7 +283,9 @@ class AivmModelRuntimeState(BaseModel):
     is_loaded_in_vram: bool = Field(
         description="この音声合成モデルが現在 VRAM にロードされているかどうか"
     )
-    is_pinned: bool = Field(description="この音声合成モデルが eviction 対象から保護されているかどうか")
+    is_pinned: bool = Field(
+        description="この音声合成モデルが eviction 対象から保護されているかどうか"
+    )
     residency: Literal["unloaded", "ram", "vram"] = Field(
         description="この音声合成モデルの現在の常駐状態"
     )
@@ -310,19 +312,19 @@ class AivmModelRuntimePolicy(BaseModel):
 
     max_loaded_models: int | None = Field(
         default=None,
-        description="自動 eviction 後に維持したい最大ロード済みモデル数。null の場合は自動 eviction を無効化する"
+        description="自動 eviction 後に維持したい最大ロード済みモデル数。null の場合は自動 eviction を無効化する",
     )
     max_vram_loaded_models: int | None = Field(
         default=None,
-        description="自動 demote 後に維持したい最大 VRAM ロード済みモデル数。null の場合は自動 demote を無効化する"
+        description="自動 demote 後に維持したい最大 VRAM ロード済みモデル数。null の場合は自動 demote を無効化する",
     )
     min_available_ram_gb: float | None = Field(
         default=None,
-        description="自動 eviction 後に確保したい最小空き RAM 容量 (GB)。null の場合は RAM 残量ベースの自動 eviction を無効化する"
+        description="自動 eviction 後に確保したい最小空き RAM 容量 (GB)。null の場合は RAM 残量ベースの自動 eviction を無効化する",
     )
     min_available_vram_gb: float | None = Field(
         default=None,
-        description="自動 demote 後に確保したい最小空き VRAM 容量 (GB)。null の場合は VRAM 残量ベースの自動 demote を無効化する"
+        description="自動 demote 後に確保したい最小空き VRAM 容量 (GB)。null の場合は VRAM 残量ベースの自動 demote を無効化する",
     )
 
 
@@ -351,8 +353,12 @@ class AivmModelRuntimeResourceSnapshot(BaseModel):
         description="推論に使用する GPU の空き VRAM 容量 (GB)。取得できない場合は null"
     )
     loaded_model_count: int = Field(description="現在ロード済みの音声合成モデル数")
-    vram_loaded_model_count: int = Field(description="現在 VRAM にロード済みの音声合成モデル数")
-    runtime_policy: AivmModelRuntimePolicy = Field(description="現在のランタイム運用ポリシー")
+    vram_loaded_model_count: int = Field(
+        description="現在 VRAM にロード済みの音声合成モデル数"
+    )
+    runtime_policy: AivmModelRuntimePolicy = Field(
+        description="現在のランタイム運用ポリシー"
+    )
     model_resource_estimates: list[AivmModelResourceEstimate] = Field(
         description="音声合成モデルごとの推定リソース使用量一覧"
     )
@@ -363,7 +369,9 @@ class AivmModelAdmissionDecision(BaseModel):
 
     model_uuid: str = Field(description="対象の音声合成モデル UUID")
     operation: Literal["prefetch", "promote"] = Field(description="判定対象の操作")
-    can_admit: bool = Field(description="現在の資源状況でこの操作を受け入れ可能かどうか")
+    can_admit: bool = Field(
+        description="現在の資源状況でこの操作を受け入れ可能かどうか"
+    )
     estimated_ram_cache_size_gb: float = Field(
         description="この操作で必要となる推定 RAM キャッシュ使用量 (GB)"
     )

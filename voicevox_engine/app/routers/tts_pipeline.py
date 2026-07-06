@@ -20,6 +20,7 @@ from voicevox_engine.preset.preset_manager import (
     PresetInternalError,
     PresetManager,
 )
+from voicevox_engine.tts_pipeline.audio_postprocessing import output_wave_to_pcm_chunks
 from voicevox_engine.tts_pipeline.connect_base64_waves import (
     ConnectBase64WavesException,
     connect_base64_waves,
@@ -33,7 +34,6 @@ from voicevox_engine.tts_pipeline.model import (
 )
 from voicevox_engine.tts_pipeline.song_engine import SongEngineManager
 from voicevox_engine.tts_pipeline.tts_engine import LATEST_VERSION, TTSEngineManager
-from voicevox_engine.tts_pipeline.audio_postprocessing import output_wave_to_pcm_chunks
 
 
 class ParseKanaBadRequest(BaseModel):

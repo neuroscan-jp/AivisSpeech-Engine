@@ -2,7 +2,16 @@
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Path,
+    Query,
+    UploadFile,
+)
 
 from voicevox_engine.aivm_manager import AivmManager
 from voicevox_engine.model import (
@@ -168,7 +177,11 @@ def generate_aivm_models_router(
     def demote_model_runtime_states(
         max_vram_loaded_models: Annotated[
             int,
-            Query(description="降格後に維持したい最大 VRAM ロード済みモデル数", ge=0, le=100),
+            Query(
+                description="降格後に維持したい最大 VRAM ロード済みモデル数",
+                ge=0,
+                le=100,
+            ),
         ],
         exclude_aivm_model_uuids: Annotated[
             list[str] | None,
@@ -192,7 +205,11 @@ def generate_aivm_models_router(
     def evict_model_runtime_states(
         max_loaded_models: Annotated[
             int,
-            Query(description="アンロード後に維持したい最大ロード済みモデル数", ge=0, le=100),
+            Query(
+                description="アンロード後に維持したい最大ロード済みモデル数",
+                ge=0,
+                le=100,
+            ),
         ],
         exclude_aivm_model_uuids: Annotated[
             list[str] | None,
