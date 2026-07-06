@@ -3,7 +3,7 @@
 from fastapi.testclient import TestClient
 from syrupy.assertion import SnapshotAssertion
 
-from test.e2e.single_api.utils import gen_mora, get_first_style_id
+from test.e2e.single_api.utils import gen_mora, get_first_style_id, get_first_style_id
 
 # from test.utility import hash_wave_floats_from_wav_bytes
 
@@ -85,7 +85,9 @@ def test_post_synthesis_old_audio_query_200(
     # assert snapshot == hash_wave_floats_from_wav_bytes(response.read())
 
 
-def test_post_synthesis_pcm_200(client: TestClient) -> None:
+def test_post_synthesis_pcm_200(client_with_default_model: TestClient) -> None:
+    client = client_with_default_model
+    style_id = get_first_style_id(client)
     query = {
         "accent_phrases": [
             {
@@ -111,7 +113,7 @@ def test_post_synthesis_pcm_200(client: TestClient) -> None:
         "outputStereo": False,
         "kana": "テスト",
     }
-    response = client.post("/synthesis_pcm", params={"speaker": 888753760}, json=query)
+    response = client.post("/synthesis_pcm", params={"speaker": style_id}, json=query)
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/octet-stream"

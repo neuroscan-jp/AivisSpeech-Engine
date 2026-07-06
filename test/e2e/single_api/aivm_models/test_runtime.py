@@ -5,18 +5,20 @@ from fastapi.testclient import TestClient
 from test.e2e.single_api.utils import gen_mora
 
 
-def _get_first_aivm_model_uuid(client: TestClient) -> str:
-    response = client.get("/aivm_models")
+def _get_first_aivm_model_uuid(test_client: TestClient) -> str:
+    response = test_client.get("/aivm_models")
     assert response.status_code == 200
     installed_models = response.json()
     assert len(installed_models) > 0
     return str(next(iter(installed_models.keys())))
 
 
-def test_get_model_runtime_state_200_for_unloaded_model(client: TestClient) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+def test_get_model_runtime_state_200_for_unloaded_model(
+    client_with_default_model: TestClient,
+) -> None:
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    response = client.get(f"/aivm_models/{aivm_model_uuid}/runtime")
+    response = client_with_default_model.get(f"/aivm_models/{aivm_model_uuid}/runtime")
 
     assert response.status_code == 200
     payload = response.json()
@@ -34,10 +36,14 @@ def test_get_model_runtime_state_200_for_unloaded_model(client: TestClient) -> N
     assert payload["last_unloaded_at"] is None
 
 
-def test_post_prefetch_model_200_updates_runtime_state(client: TestClient) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+def test_post_prefetch_model_200_updates_runtime_state(
+    client_with_default_model: TestClient,
+) -> None:
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    prefetch_response = client.post(f"/aivm_models/{aivm_model_uuid}/prefetch")
+    prefetch_response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/prefetch"
+    )
 
     assert prefetch_response.status_code == 200
     payload = prefetch_response.json()
@@ -52,7 +58,7 @@ def test_post_prefetch_model_200_updates_runtime_state(client: TestClient) -> No
     assert payload["onnx_providers"]
     assert payload["last_loaded_at"] is None
 
-    runtime_list_response = client.get("/aivm_models/runtime")
+    runtime_list_response = client_with_default_model.get("/aivm_models/runtime")
     assert runtime_list_response.status_code == 200
     runtime_list = runtime_list_response.json()
     assert len(runtime_list) >= 1
@@ -60,10 +66,12 @@ def test_post_prefetch_model_200_updates_runtime_state(client: TestClient) -> No
     assert runtime_list[0]["is_loaded"] is True
 
 
-def test_get_runtime_resources_200_returns_current_snapshot(client: TestClient) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+def test_get_runtime_resources_200_returns_current_snapshot(
+    client_with_default_model: TestClient,
+) -> None:
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    response = client.get("/aivm_models/runtime/resources")
+    response = client_with_default_model.get("/aivm_models/runtime/resources")
 
     assert response.status_code == 200
     payload = response.json()
@@ -83,10 +91,12 @@ def test_get_runtime_resources_200_returns_current_snapshot(client: TestClient) 
     assert target_estimate["estimated_vram_load_size_gb"] > 0
 
 
-def test_get_model_admission_200_returns_dry_run_decision(client: TestClient) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+def test_get_model_admission_200_returns_dry_run_decision(
+    client_with_default_model: TestClient,
+) -> None:
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    response = client.get(
+    response = client_with_default_model.get(
         f"/aivm_models/{aivm_model_uuid}/admission",
         params={"operation": "prefetch"},
     )
@@ -101,10 +111,12 @@ def test_get_model_admission_200_returns_dry_run_decision(client: TestClient) ->
     assert payload["runtime_resources"]["inference_device"] == "cpu"
 
 
-def test_get_model_admission_200_reports_ram_shortage(client: TestClient) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+def test_get_model_admission_200_reports_ram_shortage(
+    client_with_default_model: TestClient,
+) -> None:
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    update_response = client.put(
+    update_response = client_with_default_model.put(
         "/aivm_models/runtime/policy",
         json={
             "max_loaded_models": None,
@@ -115,7 +127,7 @@ def test_get_model_admission_200_reports_ram_shortage(client: TestClient) -> Non
     )
     assert update_response.status_code == 200
 
-    response = client.get(
+    response = client_with_default_model.get(
         f"/aivm_models/{aivm_model_uuid}/admission",
         params={"operation": "prefetch"},
     )
@@ -127,14 +139,20 @@ def test_get_model_admission_200_reports_ram_shortage(client: TestClient) -> Non
     assert payload["required_min_available_ram_gb"] == 1000000.0
 
 
-def test_post_promote_model_200_loads_prefetched_model(client: TestClient) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+def test_post_promote_model_200_loads_prefetched_model(
+    client_with_default_model: TestClient,
+) -> None:
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    prefetch_response = client.post(f"/aivm_models/{aivm_model_uuid}/prefetch")
+    prefetch_response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/prefetch"
+    )
     assert prefetch_response.status_code == 200
     assert prefetch_response.json()["load_count"] == 0
 
-    promote_response = client.post(f"/aivm_models/{aivm_model_uuid}/promote")
+    promote_response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/promote"
+    )
 
     assert promote_response.status_code == 200
     payload = promote_response.json()
@@ -147,16 +165,24 @@ def test_post_promote_model_200_loads_prefetched_model(client: TestClient) -> No
     assert payload["last_loaded_at"] is not None
 
 
-def test_post_unload_model_204_updates_runtime_state(client: TestClient) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+def test_post_unload_model_204_updates_runtime_state(
+    client_with_default_model: TestClient,
+) -> None:
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    prefetch_response = client.post(f"/aivm_models/{aivm_model_uuid}/prefetch")
+    prefetch_response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/prefetch"
+    )
     assert prefetch_response.status_code == 200
 
-    unload_response = client.post(f"/aivm_models/{aivm_model_uuid}/unload")
+    unload_response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/unload"
+    )
     assert unload_response.status_code == 204
 
-    runtime_response = client.get(f"/aivm_models/{aivm_model_uuid}/runtime")
+    runtime_response = client_with_default_model.get(
+        f"/aivm_models/{aivm_model_uuid}/runtime"
+    )
     assert runtime_response.status_code == 200
     payload = runtime_response.json()
     assert payload["model_uuid"] == aivm_model_uuid
@@ -170,13 +196,19 @@ def test_post_unload_model_204_updates_runtime_state(client: TestClient) -> None
     assert payload["last_unloaded_at"] is not None
 
 
-def test_get_runtime_unload_candidates_200(client: TestClient) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+def test_get_runtime_unload_candidates_200(
+    client_with_default_model: TestClient,
+) -> None:
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    prefetch_response = client.post(f"/aivm_models/{aivm_model_uuid}/prefetch")
+    prefetch_response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/prefetch"
+    )
     assert prefetch_response.status_code == 200
 
-    response = client.get("/aivm_models/runtime/unload_candidates", params={"limit": 1})
+    response = client_with_default_model.get(
+        "/aivm_models/runtime/unload_candidates", params={"limit": 1}
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -186,38 +218,46 @@ def test_get_runtime_unload_candidates_200(client: TestClient) -> None:
 
 
 def test_post_pin_model_200_and_candidates_skip_pinned_model(
-    client: TestClient,
+    client_with_default_model: TestClient,
 ) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    prefetch_response = client.post(f"/aivm_models/{aivm_model_uuid}/prefetch")
+    prefetch_response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/prefetch"
+    )
     assert prefetch_response.status_code == 200
 
-    pin_response = client.post(f"/aivm_models/{aivm_model_uuid}/pin")
+    pin_response = client_with_default_model.post(f"/aivm_models/{aivm_model_uuid}/pin")
     assert pin_response.status_code == 200
     assert pin_response.json()["is_pinned"] is True
 
-    candidates_response = client.get(
+    candidates_response = client_with_default_model.get(
         "/aivm_models/runtime/unload_candidates", params={"limit": 1}
     )
     assert candidates_response.status_code == 200
     assert candidates_response.json() == []
 
 
-def test_post_unpin_model_200_restores_candidate_selection(client: TestClient) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+def test_post_unpin_model_200_restores_candidate_selection(
+    client_with_default_model: TestClient,
+) -> None:
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    prefetch_response = client.post(f"/aivm_models/{aivm_model_uuid}/prefetch")
+    prefetch_response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/prefetch"
+    )
     assert prefetch_response.status_code == 200
 
-    pin_response = client.post(f"/aivm_models/{aivm_model_uuid}/pin")
+    pin_response = client_with_default_model.post(f"/aivm_models/{aivm_model_uuid}/pin")
     assert pin_response.status_code == 200
 
-    unpin_response = client.post(f"/aivm_models/{aivm_model_uuid}/unpin")
+    unpin_response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/unpin"
+    )
     assert unpin_response.status_code == 200
     assert unpin_response.json()["is_pinned"] is False
 
-    candidates_response = client.get(
+    candidates_response = client_with_default_model.get(
         "/aivm_models/runtime/unload_candidates", params={"limit": 1}
     )
     assert candidates_response.status_code == 200
@@ -226,22 +266,28 @@ def test_post_unpin_model_200_restores_candidate_selection(client: TestClient) -
     assert payload[0]["model_uuid"] == aivm_model_uuid
 
 
-def test_post_runtime_evict_200_skips_pinned_model(client: TestClient) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+def test_post_runtime_evict_200_skips_pinned_model(
+    client_with_default_model: TestClient,
+) -> None:
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    prefetch_response = client.post(f"/aivm_models/{aivm_model_uuid}/prefetch")
+    prefetch_response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/prefetch"
+    )
     assert prefetch_response.status_code == 200
 
-    pin_response = client.post(f"/aivm_models/{aivm_model_uuid}/pin")
+    pin_response = client_with_default_model.post(f"/aivm_models/{aivm_model_uuid}/pin")
     assert pin_response.status_code == 200
 
-    evict_response = client.post(
+    evict_response = client_with_default_model.post(
         "/aivm_models/runtime/evict", params={"max_loaded_models": 0}
     )
     assert evict_response.status_code == 200
     assert evict_response.json() == []
 
-    runtime_response = client.get(f"/aivm_models/{aivm_model_uuid}/runtime")
+    runtime_response = client_with_default_model.get(
+        f"/aivm_models/{aivm_model_uuid}/runtime"
+    )
     assert runtime_response.status_code == 200
     runtime_payload = runtime_response.json()
     assert runtime_payload["is_loaded"] is True
@@ -249,26 +295,34 @@ def test_post_runtime_evict_200_skips_pinned_model(client: TestClient) -> None:
 
 
 def test_get_runtime_demote_candidates_200_returns_empty_on_cpu(
-    client: TestClient,
+    client_with_default_model: TestClient,
 ) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    prefetch_response = client.post(f"/aivm_models/{aivm_model_uuid}/prefetch")
+    prefetch_response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/prefetch"
+    )
     assert prefetch_response.status_code == 200
 
-    response = client.get("/aivm_models/runtime/demote_candidates", params={"limit": 1})
+    response = client_with_default_model.get(
+        "/aivm_models/runtime/demote_candidates", params={"limit": 1}
+    )
 
     assert response.status_code == 200
     assert response.json() == []
 
 
-def test_post_runtime_evict_200_unloads_excess_models(client: TestClient) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+def test_post_runtime_evict_200_unloads_excess_models(
+    client_with_default_model: TestClient,
+) -> None:
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    prefetch_response = client.post(f"/aivm_models/{aivm_model_uuid}/prefetch")
+    prefetch_response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/prefetch"
+    )
     assert prefetch_response.status_code == 200
 
-    evict_response = client.post(
+    evict_response = client_with_default_model.post(
         "/aivm_models/runtime/evict", params={"max_loaded_models": 0}
     )
 
@@ -279,19 +333,27 @@ def test_post_runtime_evict_200_unloads_excess_models(client: TestClient) -> Non
     assert payload[0]["is_loaded"] is False
     assert payload[0]["residency"] == "unloaded"
 
-    runtime_response = client.get(f"/aivm_models/{aivm_model_uuid}/runtime")
+    runtime_response = client_with_default_model.get(
+        f"/aivm_models/{aivm_model_uuid}/runtime"
+    )
     assert runtime_response.status_code == 200
     runtime_payload = runtime_response.json()
     assert runtime_payload["is_loaded"] is False
 
 
-def test_post_demote_model_200_keeps_ram_cache(client: TestClient) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+def test_post_demote_model_200_keeps_ram_cache(
+    client_with_default_model: TestClient,
+) -> None:
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    prefetch_response = client.post(f"/aivm_models/{aivm_model_uuid}/prefetch")
+    prefetch_response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/prefetch"
+    )
     assert prefetch_response.status_code == 200
 
-    demote_response = client.post(f"/aivm_models/{aivm_model_uuid}/demote")
+    demote_response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/demote"
+    )
 
     assert demote_response.status_code == 200
     payload = demote_response.json()
@@ -304,11 +366,11 @@ def test_post_demote_model_200_keeps_ram_cache(client: TestClient) -> None:
 
 
 def test_put_runtime_policy_200_and_auto_evict_after_synthesis(
-    client: TestClient,
+    client_with_default_model: TestClient,
 ) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    update_response = client.put(
+    update_response = client_with_default_model.put(
         "/aivm_models/runtime/policy",
         json={
             "max_loaded_models": 0,
@@ -350,14 +412,16 @@ def test_put_runtime_policy_200_and_auto_evict_after_synthesis(
         "outputStereo": False,
         "kana": "テスト",
     }
-    synthesis_response = client.post(
+    synthesis_response = client_with_default_model.post(
         "/synthesis",
         params={"speaker": 888753760},
         json=query,
     )
     assert synthesis_response.status_code == 200
 
-    runtime_policy_response = client.get("/aivm_models/runtime/policy")
+    runtime_policy_response = client_with_default_model.get(
+        "/aivm_models/runtime/policy"
+    )
     assert runtime_policy_response.status_code == 200
     assert runtime_policy_response.json() == {
         "max_loaded_models": 0,
@@ -366,7 +430,9 @@ def test_put_runtime_policy_200_and_auto_evict_after_synthesis(
         "min_available_vram_gb": None,
     }
 
-    runtime_response = client.get(f"/aivm_models/{aivm_model_uuid}/runtime")
+    runtime_response = client_with_default_model.get(
+        f"/aivm_models/{aivm_model_uuid}/runtime"
+    )
     assert runtime_response.status_code == 200
     runtime_payload = runtime_response.json()
     assert runtime_payload["is_loaded"] is False
@@ -374,9 +440,9 @@ def test_put_runtime_policy_200_and_auto_evict_after_synthesis(
 
 
 def test_put_runtime_policy_200_and_auto_demote_after_synthesis_keeps_ram_on_cpu(
-    client: TestClient,
+    client_with_default_model: TestClient,
 ) -> None:
-    update_response = client.put(
+    update_response = client_with_default_model.put(
         "/aivm_models/runtime/policy",
         json={
             "max_loaded_models": None,
@@ -418,14 +484,14 @@ def test_put_runtime_policy_200_and_auto_demote_after_synthesis_keeps_ram_on_cpu
         "outputStereo": False,
         "kana": "テスト",
     }
-    synthesis_response = client.post(
+    synthesis_response = client_with_default_model.post(
         "/synthesis",
         params={"speaker": 888753760},
         json=query,
     )
     assert synthesis_response.status_code == 200
 
-    runtime_response = client.get("/aivm_models/runtime")
+    runtime_response = client_with_default_model.get("/aivm_models/runtime")
     assert runtime_response.status_code == 200
     runtime_payload = runtime_response.json()
     loaded_models = [state for state in runtime_payload if state["is_loaded"] is True]
@@ -435,8 +501,10 @@ def test_put_runtime_policy_200_and_auto_demote_after_synthesis_keeps_ram_on_cpu
     assert loaded_models[0]["residency"] == "ram"
 
 
-def test_put_runtime_policy_200_accepts_resource_thresholds(client: TestClient) -> None:
-    update_response = client.put(
+def test_put_runtime_policy_200_accepts_resource_thresholds(
+    client_with_default_model: TestClient,
+) -> None:
+    update_response = client_with_default_model.put(
         "/aivm_models/runtime/policy",
         json={
             "max_loaded_models": None,
@@ -456,11 +524,11 @@ def test_put_runtime_policy_200_accepts_resource_thresholds(client: TestClient) 
 
 
 def test_post_prefetch_model_507_when_ram_admission_control_rejects(
-    client: TestClient,
+    client_with_default_model: TestClient,
 ) -> None:
-    aivm_model_uuid = _get_first_aivm_model_uuid(client)
+    aivm_model_uuid = _get_first_aivm_model_uuid(client_with_default_model)
 
-    update_response = client.put(
+    update_response = client_with_default_model.put(
         "/aivm_models/runtime/policy",
         json={
             "max_loaded_models": None,
@@ -471,7 +539,9 @@ def test_post_prefetch_model_507_when_ram_admission_control_rejects(
     )
     assert update_response.status_code == 200
 
-    response = client.post(f"/aivm_models/{aivm_model_uuid}/prefetch")
+    response = client_with_default_model.post(
+        f"/aivm_models/{aivm_model_uuid}/prefetch"
+    )
 
     assert response.status_code == 507
     assert response.json()["detail"] == (

@@ -319,6 +319,397 @@
         "title": "AivmManifestVoiceSample",
         "type": "object"
       },
+      "AivmModelAdmissionDecision": {
+        "description": "音声合成モデル操作の dry-run admission 判定結果。",
+        "properties": {
+          "can_admit": {
+            "description": "現在の資源状況でこの操作を受け入れ可能かどうか",
+            "title": "Can Admit",
+            "type": "boolean"
+          },
+          "estimated_ram_cache_size_gb": {
+            "description": "この操作で必要となる推定 RAM キャッシュ使用量 (GB)",
+            "title": "Estimated Ram Cache Size Gb",
+            "type": "number"
+          },
+          "estimated_vram_load_size_gb": {
+            "description": "この操作で必要となる推定 VRAM 使用量 (GB)",
+            "title": "Estimated Vram Load Size Gb",
+            "type": "number"
+          },
+          "model_uuid": {
+            "description": "対象の音声合成モデル UUID",
+            "title": "Model Uuid",
+            "type": "string"
+          },
+          "operation": {
+            "description": "判定対象の操作",
+            "enum": [
+              "prefetch",
+              "promote"
+            ],
+            "title": "Operation",
+            "type": "string"
+          },
+          "predicted_available_ram_gb": {
+            "description": "この操作を行った直後に見込まれる空き RAM 容量 (GB)",
+            "title": "Predicted Available Ram Gb",
+            "type": "number"
+          },
+          "predicted_available_vram_gb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "この操作を行った直後に見込まれる空き VRAM 容量 (GB)。取得できない場合は null",
+            "title": "Predicted Available Vram Gb"
+          },
+          "ram_shortage_gb": {
+            "description": "受け入れのために不足している RAM 容量 (GB)。不足がない場合は 0",
+            "title": "Ram Shortage Gb",
+            "type": "number"
+          },
+          "required_min_available_ram_gb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "policy で要求される最小空き RAM 容量 (GB)。未設定の場合は null",
+            "title": "Required Min Available Ram Gb"
+          },
+          "required_min_available_vram_gb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "policy で要求される最小空き VRAM 容量 (GB)。未設定の場合は null",
+            "title": "Required Min Available Vram Gb"
+          },
+          "runtime_resources": {
+            "$ref": "#/components/schemas/AivmModelRuntimeResourceSnapshot",
+            "description": "判定時点のリソース状況スナップショット"
+          },
+          "vram_shortage_gb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "受け入れのために不足している VRAM 容量 (GB)。判定不能または不足がない場合は null または 0",
+            "title": "Vram Shortage Gb"
+          }
+        },
+        "required": [
+          "model_uuid",
+          "operation",
+          "can_admit",
+          "estimated_ram_cache_size_gb",
+          "estimated_vram_load_size_gb",
+          "predicted_available_ram_gb",
+          "predicted_available_vram_gb",
+          "required_min_available_ram_gb",
+          "required_min_available_vram_gb",
+          "ram_shortage_gb",
+          "vram_shortage_gb",
+          "runtime_resources"
+        ],
+        "title": "AivmModelAdmissionDecision",
+        "type": "object"
+      },
+      "AivmModelResourceEstimate": {
+        "description": "音声合成モデルごとの推定リソース使用量。",
+        "properties": {
+          "estimated_ram_cache_size_gb": {
+            "description": "この音声合成モデルを RAM キャッシュした場合の推定使用量 (GB)",
+            "title": "Estimated Ram Cache Size Gb",
+            "type": "number"
+          },
+          "estimated_vram_load_size_gb": {
+            "description": "この音声合成モデルを VRAM にロードした場合の推定使用量 (GB)",
+            "title": "Estimated Vram Load Size Gb",
+            "type": "number"
+          },
+          "model_uuid": {
+            "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+            "title": "Model Uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_uuid",
+          "estimated_ram_cache_size_gb",
+          "estimated_vram_load_size_gb"
+        ],
+        "title": "AivmModelResourceEstimate",
+        "type": "object"
+      },
+      "AivmModelRuntimePolicy": {
+        "description": "音声合成モデルのプロセス内ランタイム運用ポリシー。",
+        "properties": {
+          "max_loaded_models": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "自動 eviction 後に維持したい最大ロード済みモデル数。null の場合は自動 eviction を無効化する",
+            "title": "Max Loaded Models"
+          },
+          "max_vram_loaded_models": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "自動 demote 後に維持したい最大 VRAM ロード済みモデル数。null の場合は自動 demote を無効化する",
+            "title": "Max Vram Loaded Models"
+          },
+          "min_available_ram_gb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "自動 eviction 後に確保したい最小空き RAM 容量 (GB)。null の場合は RAM 残量ベースの自動 eviction を無効化する",
+            "title": "Min Available Ram Gb"
+          },
+          "min_available_vram_gb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "自動 demote 後に確保したい最小空き VRAM 容量 (GB)。null の場合は VRAM 残量ベースの自動 demote を無効化する",
+            "title": "Min Available Vram Gb"
+          }
+        },
+        "title": "AivmModelRuntimePolicy",
+        "type": "object"
+      },
+      "AivmModelRuntimeResourceSnapshot": {
+        "description": "音声合成モデル運用に関する現在のリソース状況。",
+        "properties": {
+          "available_ram_gb": {
+            "description": "現在の空き RAM 容量 (GB)",
+            "title": "Available Ram Gb",
+            "type": "number"
+          },
+          "available_vram_gb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "推論に使用する GPU の空き VRAM 容量 (GB)。取得できない場合は null",
+            "title": "Available Vram Gb"
+          },
+          "inference_device": {
+            "description": "現在の推論デバイス",
+            "enum": [
+              "cpu",
+              "gpu"
+            ],
+            "title": "Inference Device",
+            "type": "string"
+          },
+          "loaded_model_count": {
+            "description": "現在ロード済みの音声合成モデル数",
+            "title": "Loaded Model Count",
+            "type": "integer"
+          },
+          "model_resource_estimates": {
+            "description": "音声合成モデルごとの推定リソース使用量一覧",
+            "items": {
+              "$ref": "#/components/schemas/AivmModelResourceEstimate"
+            },
+            "title": "Model Resource Estimates",
+            "type": "array"
+          },
+          "runtime_policy": {
+            "$ref": "#/components/schemas/AivmModelRuntimePolicy",
+            "description": "現在のランタイム運用ポリシー"
+          },
+          "total_ram_gb": {
+            "description": "ホストで利用可能な総 RAM 容量 (GB)",
+            "title": "Total Ram Gb",
+            "type": "number"
+          },
+          "total_vram_gb": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "推論に使用する GPU の総 VRAM 容量 (GB)。取得できない場合は null",
+            "title": "Total Vram Gb"
+          },
+          "vram_loaded_model_count": {
+            "description": "現在 VRAM にロード済みの音声合成モデル数",
+            "title": "Vram Loaded Model Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "inference_device",
+          "total_ram_gb",
+          "available_ram_gb",
+          "total_vram_gb",
+          "available_vram_gb",
+          "loaded_model_count",
+          "vram_loaded_model_count",
+          "runtime_policy",
+          "model_resource_estimates"
+        ],
+        "title": "AivmModelRuntimeResourceSnapshot",
+        "type": "object"
+      },
+      "AivmModelRuntimeState": {
+        "description": "音声合成モデルのプロセス内ランタイム状態。",
+        "properties": {
+          "inference_device": {
+            "description": "この音声合成モデルがロードされた推論デバイス",
+            "enum": [
+              "cpu",
+              "gpu"
+            ],
+            "title": "Inference Device",
+            "type": "string"
+          },
+          "is_cached_in_ram": {
+            "description": "この音声合成モデルが現在 RAM にキャッシュされているかどうか",
+            "title": "Is Cached In Ram",
+            "type": "boolean"
+          },
+          "is_loaded": {
+            "description": "この音声合成モデルが現在ロード済みかどうか",
+            "title": "Is Loaded",
+            "type": "boolean"
+          },
+          "is_loaded_in_vram": {
+            "description": "この音声合成モデルが現在 VRAM にロードされているかどうか",
+            "title": "Is Loaded In Vram",
+            "type": "boolean"
+          },
+          "is_pinned": {
+            "description": "この音声合成モデルが eviction 対象から保護されているかどうか",
+            "title": "Is Pinned",
+            "type": "boolean"
+          },
+          "last_loaded_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "最後にロードされた時刻 (Unix time)。未ロードの場合は null",
+            "title": "Last Loaded At"
+          },
+          "last_unloaded_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "最後にアンロードされた時刻 (Unix time)。未アンロードの場合は null",
+            "title": "Last Unloaded At"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "最後に推論で使用された時刻 (Unix time)。未使用の場合は null",
+            "title": "Last Used At"
+          },
+          "load_count": {
+            "description": "このプロセスでモデルをロードした回数",
+            "title": "Load Count",
+            "type": "integer"
+          },
+          "model_uuid": {
+            "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+            "title": "Model Uuid",
+            "type": "string"
+          },
+          "onnx_providers": {
+            "description": "この音声合成モデルのロード時に使用した ONNX Runtime Provider 一覧",
+            "items": {
+              "type": "string"
+            },
+            "title": "Onnx Providers",
+            "type": "array"
+          },
+          "residency": {
+            "description": "この音声合成モデルの現在の常駐状態",
+            "enum": [
+              "unloaded",
+              "ram",
+              "vram"
+            ],
+            "title": "Residency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_uuid",
+          "is_loaded",
+          "is_cached_in_ram",
+          "is_loaded_in_vram",
+          "is_pinned",
+          "residency",
+          "load_count",
+          "inference_device",
+          "onnx_providers",
+          "last_loaded_at",
+          "last_used_at",
+          "last_unloaded_at"
+        ],
+        "title": "AivmModelRuntimeState",
+        "type": "object"
+      },
       "AudioQuery": {
         "description": "音声合成用のクエリ。",
         "properties": {
@@ -1805,6 +2196,406 @@
         ]
       }
     },
+    "/aivm_models/runtime": {
+      "get": {
+        "description": "音声合成モデルのランタイム状態一覧を返します。",
+        "operationId": "get_model_runtime_states",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AivmModelRuntimeState"
+                  },
+                  "title": "Response Get Model Runtime States Aivm Models Runtime Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "音声合成モデルのランタイム状態一覧"
+          }
+        },
+        "summary": "音声合成モデルのランタイム状態を取得する",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      }
+    },
+    "/aivm_models/runtime/demote": {
+      "post": {
+        "description": "LRU に基づいて、指定上限を超えた VRAM ロード済みモデルを RAM キャッシュへ降格します。",
+        "operationId": "demote_model_runtime_states",
+        "parameters": [
+          {
+            "description": "降格後に維持したい最大 VRAM ロード済みモデル数",
+            "in": "query",
+            "name": "max_vram_loaded_models",
+            "required": true,
+            "schema": {
+              "description": "降格後に維持したい最大 VRAM ロード済みモデル数",
+              "maximum": 100,
+              "minimum": 0,
+              "title": "Max Vram Loaded Models",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "降格対象から除外する音声合成モデルの UUID 一覧",
+            "in": "query",
+            "name": "exclude_aivm_model_uuids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "降格対象から除外する音声合成モデルの UUID 一覧",
+              "title": "Exclude Aivm Model Uuids"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AivmModelRuntimeState"
+                  },
+                  "title": "Response Demote Model Runtime States Aivm Models Runtime Demote Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "降格された音声合成モデル一覧"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "LRU に基づいて音声合成モデルを RAM キャッシュへ降格する",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      }
+    },
+    "/aivm_models/runtime/demote_candidates": {
+      "get": {
+        "description": "LRU に基づく VRAM 降格候補の音声合成モデル一覧を返します。",
+        "operationId": "get_model_runtime_demote_candidates",
+        "parameters": [
+          {
+            "description": "返却する候補数",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "返却する候補数",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "候補から除外する音声合成モデルの UUID 一覧",
+            "in": "query",
+            "name": "exclude_aivm_model_uuids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "候補から除外する音声合成モデルの UUID 一覧",
+              "title": "Exclude Aivm Model Uuids"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AivmModelRuntimeState"
+                  },
+                  "title": "Response Get Model Runtime Demote Candidates Aivm Models Runtime Demote Candidates Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "降格候補の音声合成モデル一覧"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "LRU に基づく降格候補の音声合成モデル一覧を取得する",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      }
+    },
+    "/aivm_models/runtime/evict": {
+      "post": {
+        "description": "LRU に基づいて、指定上限を超えたロード済みモデルをアンロードします。",
+        "operationId": "evict_model_runtime_states",
+        "parameters": [
+          {
+            "description": "アンロード後に維持したい最大ロード済みモデル数",
+            "in": "query",
+            "name": "max_loaded_models",
+            "required": true,
+            "schema": {
+              "description": "アンロード後に維持したい最大ロード済みモデル数",
+              "maximum": 100,
+              "minimum": 0,
+              "title": "Max Loaded Models",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "アンロード対象から除外する音声合成モデルの UUID 一覧",
+            "in": "query",
+            "name": "exclude_aivm_model_uuids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "アンロード対象から除外する音声合成モデルの UUID 一覧",
+              "title": "Exclude Aivm Model Uuids"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AivmModelRuntimeState"
+                  },
+                  "title": "Response Evict Model Runtime States Aivm Models Runtime Evict Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "アンロードされた音声合成モデル一覧"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "LRU に基づいて音声合成モデルをアンロードする",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      }
+    },
+    "/aivm_models/runtime/policy": {
+      "get": {
+        "description": "音声合成モデルのランタイム運用ポリシーを返します。",
+        "operationId": "get_model_runtime_policy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AivmModelRuntimePolicy"
+                }
+              }
+            },
+            "description": "音声合成モデルのランタイム運用ポリシー"
+          }
+        },
+        "summary": "音声合成モデルのランタイム運用ポリシーを取得する",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      },
+      "put": {
+        "description": "音声合成モデルのランタイム運用ポリシーを更新します。",
+        "operationId": "update_model_runtime_policy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AivmModelRuntimePolicy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AivmModelRuntimePolicy"
+                }
+              }
+            },
+            "description": "更新後の音声合成モデルのランタイム運用ポリシー"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "音声合成モデルのランタイム運用ポリシーを更新する",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      }
+    },
+    "/aivm_models/runtime/resources": {
+      "get": {
+        "description": "音声合成モデル運用の現在のリソース状況を返します。",
+        "operationId": "get_model_runtime_resources",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AivmModelRuntimeResourceSnapshot"
+                }
+              }
+            },
+            "description": "音声合成モデル運用の現在のリソース状況"
+          }
+        },
+        "summary": "音声合成モデル運用の現在のリソース状況を取得する",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      }
+    },
+    "/aivm_models/runtime/unload_candidates": {
+      "get": {
+        "description": "LRU に基づくアンロード候補の音声合成モデル一覧を返します。",
+        "operationId": "get_model_runtime_unload_candidates",
+        "parameters": [
+          {
+            "description": "返却する候補数",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "返却する候補数",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "候補から除外する音声合成モデルの UUID 一覧",
+            "in": "query",
+            "name": "exclude_aivm_model_uuids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "候補から除外する音声合成モデルの UUID 一覧",
+              "title": "Exclude Aivm Model Uuids"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AivmModelRuntimeState"
+                  },
+                  "title": "Response Get Model Runtime Unload Candidates Aivm Models Runtime Unload Candidates Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "アンロード候補の音声合成モデル一覧"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "LRU に基づくアンロード候補の音声合成モデル一覧を取得する",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      }
+    },
     "/aivm_models/{aivm_model_uuid}": {
       "get": {
         "description": "指定された音声合成モデルの情報を取得します。",
@@ -1850,6 +2641,112 @@
         ]
       }
     },
+    "/aivm_models/{aivm_model_uuid}/admission": {
+      "get": {
+        "description": "指定された音声合成モデル操作の dry-run admission 判定結果を返します。",
+        "operationId": "get_model_admission_decision",
+        "parameters": [
+          {
+            "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+            "in": "path",
+            "name": "aivm_model_uuid",
+            "required": true,
+            "schema": {
+              "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+              "title": "Aivm Model Uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "dry-run 判定対象の操作",
+            "in": "query",
+            "name": "operation",
+            "required": false,
+            "schema": {
+              "default": "prefetch",
+              "description": "dry-run 判定対象の操作",
+              "enum": [
+                "prefetch",
+                "promote"
+              ],
+              "title": "Operation",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AivmModelAdmissionDecision"
+                }
+              }
+            },
+            "description": "指定された音声合成モデル操作の dry-run admission 判定結果"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "指定された音声合成モデル操作の dry-run admission 判定を取得する",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      }
+    },
+    "/aivm_models/{aivm_model_uuid}/demote": {
+      "post": {
+        "description": "指定された音声合成モデルを推論ロード状態から RAM キャッシュ状態へ降格します。",
+        "operationId": "demote_model",
+        "parameters": [
+          {
+            "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+            "in": "path",
+            "name": "aivm_model_uuid",
+            "required": true,
+            "schema": {
+              "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+              "title": "Aivm Model Uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AivmModelRuntimeState"
+                }
+              }
+            },
+            "description": "降格後の音声合成モデルのランタイム状態"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "指定された音声合成モデルを RAM キャッシュへ降格する",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      }
+    },
     "/aivm_models/{aivm_model_uuid}/load": {
       "post": {
         "description": "指定された音声合成モデルをロードします。すでにロード済みの場合は何も行われません。<br>\n実行しなくても他の API は利用できますが、音声合成の初回実行時に時間がかかることがあります。",
@@ -1883,6 +2780,186 @@
           }
         },
         "summary": "指定された音声合成モデルをロードする",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      }
+    },
+    "/aivm_models/{aivm_model_uuid}/pin": {
+      "post": {
+        "description": "指定された音声合成モデルを pin し、eviction 対象から保護します。",
+        "operationId": "pin_model",
+        "parameters": [
+          {
+            "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+            "in": "path",
+            "name": "aivm_model_uuid",
+            "required": true,
+            "schema": {
+              "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+              "title": "Aivm Model Uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AivmModelRuntimeState"
+                }
+              }
+            },
+            "description": "更新後の音声合成モデルのランタイム状態"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "指定された音声合成モデルを eviction 対象から保護する",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      }
+    },
+    "/aivm_models/{aivm_model_uuid}/prefetch": {
+      "post": {
+        "description": "指定された音声合成モデルを RAM キャッシュへ先読みします。",
+        "operationId": "prefetch_model",
+        "parameters": [
+          {
+            "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+            "in": "path",
+            "name": "aivm_model_uuid",
+            "required": true,
+            "schema": {
+              "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+              "title": "Aivm Model Uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AivmModelRuntimeState"
+                }
+              }
+            },
+            "description": "先読み後の音声合成モデルのランタイム状態"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "指定された音声合成モデルを先読みする",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      }
+    },
+    "/aivm_models/{aivm_model_uuid}/promote": {
+      "post": {
+        "description": "指定された音声合成モデルを RAM キャッシュ状態から推論ロード状態へ昇格します。",
+        "operationId": "promote_model",
+        "parameters": [
+          {
+            "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+            "in": "path",
+            "name": "aivm_model_uuid",
+            "required": true,
+            "schema": {
+              "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+              "title": "Aivm Model Uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AivmModelRuntimeState"
+                }
+              }
+            },
+            "description": "昇格後の音声合成モデルのランタイム状態"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "指定された音声合成モデルを推論ロード状態へ昇格する",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      }
+    },
+    "/aivm_models/{aivm_model_uuid}/runtime": {
+      "get": {
+        "description": "指定された音声合成モデルのランタイム状態を返します。",
+        "operationId": "get_model_runtime_state",
+        "parameters": [
+          {
+            "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+            "in": "path",
+            "name": "aivm_model_uuid",
+            "required": true,
+            "schema": {
+              "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+              "title": "Aivm Model Uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AivmModelRuntimeState"
+                }
+              }
+            },
+            "description": "指定された音声合成モデルのランタイム状態"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "指定された音声合成モデルのランタイム状態を取得する",
         "tags": [
           "音声合成モデル管理"
         ]
@@ -1959,6 +3036,51 @@
           }
         },
         "summary": "指定された音声合成モデルをアンロードする",
+        "tags": [
+          "音声合成モデル管理"
+        ]
+      }
+    },
+    "/aivm_models/{aivm_model_uuid}/unpin": {
+      "post": {
+        "description": "指定された音声合成モデルの pin を解除します。",
+        "operationId": "unpin_model",
+        "parameters": [
+          {
+            "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+            "in": "path",
+            "name": "aivm_model_uuid",
+            "required": true,
+            "schema": {
+              "description": "AIVM マニフェスト記載の音声合成モデルの UUID",
+              "title": "Aivm Model Uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AivmModelRuntimeState"
+                }
+              }
+            },
+            "description": "更新後の音声合成モデルのランタイム状態"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "指定された音声合成モデルの pin を解除する",
         "tags": [
           "音声合成モデル管理"
         ]
@@ -3668,6 +4790,83 @@
           }
         },
         "summary": "2種類のスタイルでモーフィングした音声を合成する",
+        "tags": [
+          "音声合成"
+        ]
+      }
+    },
+    "/synthesis_pcm": {
+      "post": {
+        "description": "指定されたスタイル ID に紐づく音声合成モデルで PCM ストリームを返します。",
+        "operationId": "synthesis_pcm",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "speaker",
+            "required": true,
+            "schema": {
+              "title": "Speaker",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "AivisSpeech Engine ではサポートされていないパラメータです (常に無視されます) 。",
+            "in": "query",
+            "name": "enable_interrogative_upspeak",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "AivisSpeech Engine ではサポートされていないパラメータです (常に無視されます) 。",
+              "title": "Enable Interrogative Upspeak",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "AivisSpeech Engine ではサポートされていないパラメータです (常に無視されます) 。",
+            "in": "query",
+            "name": "core_version",
+            "required": false,
+            "schema": {
+              "description": "AivisSpeech Engine ではサポートされていないパラメータです (常に無視されます) 。",
+              "title": "Core Version",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "音声合成する (PCM ストリーム)",
         "tags": [
           "音声合成"
         ]
