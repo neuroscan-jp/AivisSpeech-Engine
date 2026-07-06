@@ -3,7 +3,7 @@
 from fastapi.testclient import TestClient
 from syrupy.assertion import SnapshotAssertion
 
-from test.e2e.single_api.utils import gen_mora, get_first_style_id, get_first_style_id
+from test.e2e.single_api.utils import gen_mora, get_first_style_id
 
 # from test.utility import hash_wave_floats_from_wav_bytes
 
