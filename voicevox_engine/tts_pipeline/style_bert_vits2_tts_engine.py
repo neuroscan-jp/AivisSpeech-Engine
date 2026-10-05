@@ -1543,6 +1543,9 @@ class StyleBertVITS2TTSEngine(TTSEngine):
                     sdp_ratio=sdp_ratio,
                     length=length,
                     pitch_scale=pitch_scale,
+                    # 既定の noise=0.6 は倍音を波打たせる。0 にするとピッチの震えが残らない。
+                    noise=0.0,
+                    noise_w=0.0,
                     # AivisSpeech Engine ではテキストの改行ごとの分割生成を行わない (エディタ側の機能と競合するため)
                     # line_split=True だと音素やアクセントの指定ができない
                     line_split=False,
